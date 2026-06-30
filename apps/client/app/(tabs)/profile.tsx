@@ -1,11 +1,18 @@
 import React from 'react';
 import { ScrollView, Text, View, Pressable, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { colors, spacing, typography } from '@heyhomie/design';
 import { Card, useLocale, useSetLocale } from '@heyhomie/ui';
 import type { Locale } from '@heyhomie/domain';
 
-const rows = ['Addresses', 'Payment methods', 'Terms & privacy', 'Log out'];
+const items: { label: string; route?: string; danger?: boolean }[] = [
+    { label: 'Addresses' },
+    { label: 'Payment methods' },
+    { label: 'Legal', route: '/legal' },
+    { label: 'Privacy & data', route: '/privacy-data' },
+    { label: 'Log out', danger: true },
+];
 const languages: { key: Locale; label: string }[] = [
     { key: 'pl', label: 'Polski' },
     { key: 'en', label: 'English' },
@@ -13,6 +20,7 @@ const languages: { key: Locale; label: string }[] = [
 ];
 
 export default function Profile() {
+    const router = useRouter();
     const locale = useLocale();
     const setLocale = useSetLocale();
 
@@ -37,10 +45,11 @@ export default function Profile() {
                     ))}
                 </View>
 
-                {rows.map(r => (
-                    <Text key={r} style={[styles.row, r === 'Log out' && { color: colors.danger }]}>
-                        {r}
-                    </Text>
+                {items.map(it => (
+                    <Pressable key={it.label} onPress={() => it.route && router.push(it.route)} style={styles.rowWrap}>
+                        <Text style={[styles.row, it.danger && { color: colors.danger }]}>{it.label}</Text>
+                        {it.route ? <Text style={styles.arrow}>›</Text> : null}
+                    </Pressable>
                 ))}
             </ScrollView>
         </SafeAreaView>
@@ -61,5 +70,7 @@ const styles = StyleSheet.create({
     langOn: { backgroundColor: colors.salad, borderColor: colors.salad },
     langText: { color: colors.grey, fontSize: typography.sizes.small, fontWeight: '500' },
     langTextOn: { color: colors.primary },
-    row: { fontSize: typography.sizes.body, color: colors.primary, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.border },
+    rowWrap: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: colors.border },
+    row: { fontSize: typography.sizes.body, color: colors.primary, paddingVertical: 14 },
+    arrow: { color: colors.grey, fontSize: 20 },
 });
