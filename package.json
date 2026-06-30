@@ -1,0 +1,19 @@
+{
+  "name": "heyhomie-apps",
+  "private": true,
+  "version": "0.1.0",
+  "description": "HeyHomie cross-platform app ecosystem — client, worker and admin (React Native + Expo monorepo).",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "client": "npm --workspace heyhomie-client-app run start",
+    "worker": "npm --workspace heyhomie-worker-app run start",
+    "admin": "npm --workspace heyhomie-admin-app run start",
+    "test": "npx -y tsx packages/api/logic.test.ts && npx -y tsx packages/domain/i18n.test.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

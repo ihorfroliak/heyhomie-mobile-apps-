@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "lib": ["ESNext", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@heyhomie/domain": ["packages/domain/index.ts"],
+      "@heyhomie/api": ["packages/api/index.ts"],
+      "@heyhomie/design": ["packages/design/tokens.ts"],
+      "@heyhomie/ui": ["packages/ui/src/index.ts"]
+    }
+  }
+}

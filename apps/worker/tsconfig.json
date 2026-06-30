@@ -1,0 +1,14 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "baseUrl": ".",
+    "paths": {
+      "@heyhomie/domain": ["../../packages/domain/index.ts"],
+      "@heyhomie/api": ["../../packages/api/index.ts"],
+      "@heyhomie/design": ["../../packages/design/tokens.ts"],
+      "@heyhomie/ui": ["../../packages/ui/src/index.ts"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"]
+}

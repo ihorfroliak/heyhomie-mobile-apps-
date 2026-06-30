@@ -1,0 +1,14 @@
+node_modules/
+.expo/
+dist/
+web-build/
+*.log
+.DS_Store
+
+# Secrets & environment — never commit
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
