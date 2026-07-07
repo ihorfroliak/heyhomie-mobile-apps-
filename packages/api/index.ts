@@ -4,3 +4,15 @@ export * from './config';
 export * from './http';
 export * from './homieClient';
 export * from './session';
+export * from './preferences';
+export * from './marketingClient';
+export * from './accountingClient';
+export * from './notifyClient';
+// bookingStore is a PRIVATE implementation detail — NOT exported. UI must go
+// through the OrderGateway. Importing the store from '@heyhomie/api' will fail.
+export * from './auth'; // AuthContext, tenant guard (pure — no crypto)
+export * from './orderContract'; // frozen types (Order, OrderGateway, Submit* ...)
+export * from './orderGateway'; // Local adapter + active `orderGateway` binding
+export * from './httpOrderGateway'; // Http adapter + real port (drop-in)
+export * from './orderService'; // authoritative service (shared by server + fake)
+export * from './fakeBackend'; // in-process backend for tests/dev

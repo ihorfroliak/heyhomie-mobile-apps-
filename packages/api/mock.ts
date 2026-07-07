@@ -18,9 +18,16 @@ import {
 /* People & availability                                               */
 /* ------------------------------------------------------------------ */
 
+export type { WorkerType } from '../domain';
+import type { WorkerType } from '../domain';
+
 export interface HomieProfile extends PersonRef {
     city: string;
     services: string[]; // e.g. ['cleaning', 'windows']
+    /** Engagement type — set by admin when adding the homie. */
+    workerType: WorkerType;
+    /** Subcontractor id, when workerType === 'b2b'. */
+    contractorId?: string;
     /** Weekdays the homie works (0 = Sunday … 6 = Saturday). */
     availableWeekdays: number[];
     /** ISO dates (YYYY-MM-DD) the homie is blocked / already booked. */
@@ -28,9 +35,9 @@ export interface HomieProfile extends PersonRef {
 }
 
 export const homies: HomieProfile[] = [
-    { id: 'h1', firstName: 'Olena', lastInitial: 'K', rating: 4.9, city: 'krakow', services: ['cleaning', 'windows'], availableWeekdays: [1, 2, 4, 5, 6], blockedDates: ['2025-05-15'] },
-    { id: 'h2', firstName: 'Marta', lastInitial: 'W', rating: 4.8, city: 'krakow', services: ['cleaning'], availableWeekdays: [1, 2, 3, 4, 5], blockedDates: [] },
-    { id: 'h3', firstName: 'Yulia', lastInitial: 'D', rating: 4.7, city: 'krakow', services: ['cleaning', 'windows'], availableWeekdays: [3, 5, 6], blockedDates: [] },
+    { id: 'h1', firstName: 'Olena', lastInitial: 'K', rating: 4.9, city: 'krakow', services: ['cleaning', 'windows'], workerType: 'employee', availableWeekdays: [1, 2, 4, 5, 6], blockedDates: ['2025-05-15'] },
+    { id: 'h2', firstName: 'Marta', lastInitial: 'W', rating: 4.8, city: 'krakow', services: ['cleaning'], workerType: 'b2b', contractorId: 'ctr-1', availableWeekdays: [1, 2, 3, 4, 5], blockedDates: [] },
+    { id: 'h3', firstName: 'Yulia', lastInitial: 'D', rating: 4.7, city: 'krakow', services: ['cleaning', 'windows'], workerType: 'employee', availableWeekdays: [3, 5, 6], blockedDates: [] },
 ];
 
 /** Day-of-week (UTC) for an ISO date, robust to a date-only string. */
