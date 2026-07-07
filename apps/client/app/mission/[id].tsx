@@ -2,6 +2,7 @@ import React from 'react';
 import { ScrollView, Text, View, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { demoMissions } from '@heyhomie/api';
 import {
     missionTimeline,
@@ -46,7 +47,9 @@ export default function MissionDetail() {
                                     s.state === 'done' && { backgroundColor: colors.salad, borderColor: colors.salad },
                                     s.state === 'current' && { backgroundColor: colors.blue, borderColor: colors.blue },
                                 ]}
-                            />
+                            >
+                                {s.state === 'done' ? <Ionicons name="checkmark" size={9} color={colors.primary} /> : null}
+                            </View>
                             <Text style={[styles.stepLabel, s.state === 'upcoming' && { color: colors.grey }]}>
                                 {tr(missionStatusLabel[s.key as MissionStatus], locale)}
                                 {s.key === 'homie_found' && mission.homie ? ` · ${mission.homie.firstName}` : ''}
@@ -56,11 +59,13 @@ export default function MissionDetail() {
                     ))}
                 </Card>
 
-                <Row label="Time" value={`${hhmm(mission.scheduledAt)} (${formatDuration(mission.durationMinutes)})`} />
-                <Row label="Travel buffer" value={`~${mission.travelBufferMinutes} min`} />
-                <Row label="Address" value={mission.address.line1} />
-                <Row label="Homies" value={String(mission.workerCount)} />
-                <Row label="Total" value={`${formatMoney(mission.price, mission.currency, locale)} · pay after`} />
+                <Card>
+                    <Row icon="time-outline" label="Time" value={`${hhmm(mission.scheduledAt)} (${formatDuration(mission.durationMinutes)})`} />
+                    <Row icon="navigate-outline" label="Travel buffer" value={`~${mission.travelBufferMinutes} min`} />
+                    <Row icon="location-outline" label="Address" value={mission.address.line1} />
+                    <Row icon="people-outline" label="Homies" value={String(mission.workerCount)} />
+                    <Row icon="wallet-outline" label="Total" value={`${formatMoney(mission.price, mission.currency, locale)} · pay after`} />
+                </Card>
 
                 {editable ? (
                     <View style={styles.actions}>
@@ -70,17 +75,23 @@ export default function MissionDetail() {
                 ) : mission.status === 'done' ? (
                     <Button label="Rate your cleaning" variant="teal" onPress={() => router.push(`/rate/${mission.id}`)} />
                 ) : (
-                    <Text style={styles.locked}>This mission can no longer be edited.</Text>
+                    <View style={styles.lockedRow}>
+                        <Ionicons name="lock-closed-outline" size={13} color={colors.grey} />
+                        <Text style={styles.locked}>This mission can no longer be edited.</Text>
+                    </View>
                 )}
             </ScrollView>
         </SafeAreaView>
     );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ icon, label, value }: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string }) {
     return (
         <View style={styles.kv}>
-            <Text style={styles.k}>{label}</Text>
+            <View style={styles.kLeft}>
+                <Ionicons name={icon} size={15} color={colors.grey} />
+                <Text style={styles.k}>{label}</Text>
+            </View>
             <Text style={styles.v}>{value}</Text>
         </View>
     );
@@ -92,12 +103,14 @@ const styles = StyleSheet.create({
     headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
     title: { fontSize: typography.sizes.h3, fontWeight: '700', color: colors.primary, flex: 1, marginRight: spacing.sm },
     step: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6 },
-    dot: { width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: colors.border, marginRight: spacing.md },
+    dot: { width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: colors.border, marginRight: spacing.md, alignItems: 'center', justifyContent: 'center' },
     stepLabel: { fontSize: typography.sizes.small, fontWeight: '500', color: colors.primary },
-    kv: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
+    kv: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 7 },
+    kLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     k: { color: colors.grey, fontSize: typography.sizes.small },
-    v: { color: colors.primary, fontSize: typography.sizes.small, fontWeight: '500' },
+    v: { color: colors.primary, fontSize: typography.sizes.small, fontWeight: '600' },
     actions: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg },
     action: { flex: 1 },
-    locked: { color: colors.grey, fontSize: typography.sizes.small, marginTop: spacing.lg, textAlign: 'center' },
+    lockedRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: spacing.lg },
+    locked: { color: colors.grey, fontSize: typography.sizes.small, textAlign: 'center' },
 });

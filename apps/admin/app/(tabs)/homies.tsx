@@ -1,6 +1,7 @@
 import React from 'react';
 import { ScrollView, Text, View, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { homies } from '@heyhomie/api';
 import { colors, spacing, typography } from '@heyhomie/design';
 
@@ -19,12 +20,18 @@ export default function Homies() {
                                 {h.firstName} {h.lastInitial ? `${h.lastInitial}.` : ''}
                             </Text>
                             <Text style={styles.meta}>
-                                {h.city} · {h.services.join(', ')}
+                                {h.city} · {h.services.join(', ')} · {h.workerType === 'b2b' ? 'B2B (contractor)' : 'Employee'}
                             </Text>
                         </View>
                         <View style={{ alignItems: 'flex-end' }}>
-                            <Text style={styles.verified}>✓ Verified</Text>
-                            <Text style={styles.rating}>{h.rating?.toFixed(1)} ★</Text>
+                            <View style={styles.verifiedRow}>
+                                <Ionicons name="checkmark-circle" size={12} color={colors.success} />
+                                <Text style={styles.verified}>Verified</Text>
+                            </View>
+                            <View style={styles.ratingRow}>
+                                <Ionicons name="star" size={11} color={colors.warning} />
+                                <Text style={styles.rating}>{h.rating?.toFixed(1)}</Text>
+                            </View>
                         </View>
                     </View>
                 ))}
@@ -52,6 +59,8 @@ const styles = StyleSheet.create({
     avatarText: { color: colors.white, fontWeight: '700', fontSize: 12 },
     name: { fontWeight: '600', color: colors.primary, fontSize: typography.sizes.small },
     meta: { color: colors.grey, fontSize: typography.sizes.caption, marginTop: 2 },
+    verifiedRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
     verified: { color: colors.success, fontSize: typography.sizes.caption, fontWeight: '600' },
-    rating: { color: colors.grey, fontSize: typography.sizes.caption, marginTop: 2 },
+    ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
+    rating: { color: colors.grey, fontSize: typography.sizes.caption },
 });

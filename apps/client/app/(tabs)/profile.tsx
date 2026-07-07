@@ -2,16 +2,18 @@ import React from 'react';
 import { ScrollView, Text, View, Pressable, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography } from '@heyhomie/design';
 import { Card, useLocale, useSetLocale } from '@heyhomie/ui';
 import type { Locale } from '@heyhomie/domain';
 
-const items: { label: string; route?: string; danger?: boolean }[] = [
-    { label: 'Addresses' },
-    { label: 'Payment methods' },
-    { label: 'Legal', route: '/legal' },
-    { label: 'Privacy & data', route: '/privacy-data' },
-    { label: 'Log out', danger: true },
+type IconName = keyof typeof Ionicons.glyphMap;
+const items: { label: string; icon: IconName; route?: string; danger?: boolean }[] = [
+    { label: 'Addresses', icon: 'location-outline' },
+    { label: 'Payment methods', icon: 'card-outline' },
+    { label: 'Legal', icon: 'document-text-outline', route: '/legal' },
+    { label: 'Privacy & data', icon: 'shield-checkmark-outline', route: '/privacy-data' },
+    { label: 'Log out', icon: 'log-out-outline', danger: true },
 ];
 const languages: { key: Locale; label: string }[] = [
     { key: 'pl', label: 'Polski' },
@@ -47,8 +49,11 @@ export default function Profile() {
 
                 {items.map(it => (
                     <Pressable key={it.label} onPress={() => it.route && router.push(it.route)} style={styles.rowWrap}>
-                        <Text style={[styles.row, it.danger && { color: colors.danger }]}>{it.label}</Text>
-                        {it.route ? <Text style={styles.arrow}>›</Text> : null}
+                        <View style={styles.rowLeft}>
+                            <Ionicons name={it.icon} size={18} color={it.danger ? colors.danger : colors.blue} />
+                            <Text style={[styles.row, it.danger && { color: colors.danger }]}>{it.label}</Text>
+                        </View>
+                        {it.route ? <Ionicons name="chevron-forward" size={18} color={colors.grey} /> : null}
                     </Pressable>
                 ))}
             </ScrollView>
@@ -70,7 +75,7 @@ const styles = StyleSheet.create({
     langOn: { backgroundColor: colors.salad, borderColor: colors.salad },
     langText: { color: colors.grey, fontSize: typography.sizes.small, fontWeight: '500' },
     langTextOn: { color: colors.primary },
-    rowWrap: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: colors.border },
-    row: { fontSize: typography.sizes.body, color: colors.primary, paddingVertical: 14 },
-    arrow: { color: colors.grey, fontSize: 20 },
+    rowWrap: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: colors.border, paddingVertical: 14 },
+    rowLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+    row: { fontSize: typography.sizes.body, color: colors.primary },
 });

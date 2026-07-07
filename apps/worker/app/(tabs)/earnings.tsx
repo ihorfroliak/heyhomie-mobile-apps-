@@ -1,38 +1,72 @@
 import React from 'react';
 import { ScrollView, Text, View, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { demoMissions } from '@heyhomie/api';
-import { formatMoney, type Locale } from '@heyhomie/domain';
+import { Ionicons } from '@expo/vector-icons';
+import { demoMissions, demoTips } from '@heyhomie/api';
+import { splitMissions, missionTimes, tipsForOrder, totalTips, formatDuration, formatMoney } from '@heyhomie/domain';
 import { colors, spacing, typography } from '@heyhomie/design';
-import { Card, useLocale } from '@heyhomie/ui';
+import { Card } from '@heyhomie/ui';
 
-const done = demoMissions.filter(m => m.status === 'done');
+const hhmm = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '—');
+const dmy = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: '2-digit', month: 'short' });
+const money = (n: number) => formatMoney(n, 'PLN', 'en');
 
-export default function Earnings() {
-    const locale = useLocale();
-    const balance = done.reduce((s, m) => s + m.price, 0) + 1151; // demo carry-over
+export default function WorkLog() {
+    const { past } = splitMissions(demoMissions);
+    const done = past.filter(m => m.status === 'done');
+    const totalMinutes = done.reduce((s, m) => s + m.durationMinutes, 0);
+    // Tips are the one money the worker sees — 100% theirs. Payouts/rates stay hidden.
+    const myTips = done.flatMap(m => tipsForOrder(demoTips, m.id));
+    const tipsTotal = totalTips(myTips);
+
     return (
         <SafeAreaView style={styles.safe} edges={['top']}>
             <ScrollView contentContainerStyle={styles.body}>
-                <Text style={styles.h1}>Earnings</Text>
-                <Card variant="fill" style={{ marginBottom: spacing.md, alignItems: 'center' }}>
-                    <Text style={styles.kLabel}>Available balance</Text>
-                    <Text style={styles.kValue}>{formatMoney(balance, 'PLN', locale)}</Text>
-                </Card>
-                <Card style={{ marginBottom: spacing.lg }}>
-                    <View style={styles.row}>
-                        <Text style={styles.meta}>Next payout</Text>
-                        <Text style={styles.strong}>15 May</Text>
-                    </View>
-                    <Text style={styles.note}>Payouts run on the 1st & 15th of each month.</Text>
-                </Card>
-                <Text style={styles.section}>Recent</Text>
-                {done.map(m => (
-                    <View key={m.id} style={styles.tx}>
-                        <Text style={styles.meta}>{m.plan === 'general' ? 'General' : 'Standard'} · {m.client.firstName}</Text>
-                        <Text style={styles.strong}>+{formatMoney(m.price, m.currency, locale)}</Text>
-                    </View>
-                ))}
+                <Text style={styles.h1}>Work log</Text>
+                <View style={styles.kpis}>
+                    <Card variant="fill" style={styles.kpi}>
+                        <Ionicons name="time-outline" size={16} color={colors.grey} />
+                        <Text style={styles.kLabel}>Time worked</Text>
+                        <Text style={styles.kValue}>{formatDuration(totalMinutes)}</Text>
+                    </Card>
+                    <Card style={[styles.kpi, styles.tipKpi]}>
+                        <Ionicons name="heart" size={16} color={colors.success} />
+                        <Text style={[styles.kLabel, { color: colors.success }]}>Tips received</Text>
+                        <Text style={[styles.kValue, { color: colors.success }]}>{money(tipsTotal)}</Text>
+                    </Card>
+                </View>
+
+                {done.map(m => {
+                    const t = missionTimes(m);
+                    const tip = totalTips(tipsForOrder(demoTips, m.id));
+                    return (
+                        <Card key={m.id} style={styles.card}>
+                            <Text style={styles.title}>
+                                {m.plan === 'general' ? 'General' : 'Standard'} · {dmy(m.scheduledAt)}
+                            </Text>
+                            <View style={styles.times}>
+                                <View style={styles.col}>
+                                    <Text style={styles.colLabel}>Planned</Text>
+                                    <Text style={styles.colValue}>
+                                        {hhmm(t.scheduledStart)}–{hhmm(t.scheduledEnd)}
+                                    </Text>
+                                </View>
+                                <View style={styles.col}>
+                                    <Text style={styles.colLabel}>Actual</Text>
+                                    <Text style={styles.colValue}>
+                                        {hhmm(t.actualStart)}–{hhmm(t.actualEnd)}
+                                    </Text>
+                                </View>
+                            </View>
+                            {tip > 0 ? (
+                                <View style={styles.tipRow}>
+                                    <Ionicons name="heart" size={13} color={colors.success} />
+                                    <Text style={styles.tip}>Tip from client: +{money(tip)}</Text>
+                                </View>
+                            ) : null}
+                        </Card>
+                    );
+                })}
             </ScrollView>
         </SafeAreaView>
     );
@@ -42,12 +76,17 @@ const styles = StyleSheet.create({
     safe: { flex: 1, backgroundColor: colors.white },
     body: { padding: spacing.lg },
     h1: { fontSize: typography.sizes.h2, fontWeight: '700', color: colors.primary, marginBottom: spacing.lg },
-    kLabel: { color: colors.grey, fontSize: typography.sizes.small },
-    kValue: { fontSize: typography.sizes.h1, fontWeight: '700', color: colors.primary },
-    row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    section: { fontSize: typography.sizes.small, color: colors.grey, marginBottom: spacing.sm },
-    tx: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border },
-    meta: { color: colors.grey, fontSize: typography.sizes.small },
-    strong: { color: colors.primary, fontWeight: '700', fontSize: typography.sizes.small },
-    note: { color: colors.grey, fontSize: typography.sizes.caption, marginTop: 4 },
+    kpis: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.lg },
+    kpi: { flex: 1 },
+    tipKpi: { backgroundColor: '#E1F5EE' },
+    kLabel: { color: colors.grey, fontSize: typography.sizes.caption, marginTop: 6 },
+    kValue: { fontSize: typography.sizes.h2, fontWeight: '700', color: colors.primary, marginTop: 2 },
+    card: { marginBottom: spacing.md },
+    tipRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: spacing.sm },
+    tip: { color: colors.success, fontWeight: '700', fontSize: typography.sizes.small },
+    title: { fontWeight: '600', color: colors.primary, fontSize: typography.sizes.small, marginBottom: spacing.sm },
+    times: { flexDirection: 'row', gap: spacing.lg },
+    col: { flex: 1 },
+    colLabel: { color: colors.grey, fontSize: typography.sizes.caption },
+    colValue: { color: colors.primary, fontSize: typography.sizes.body, fontWeight: '500', marginTop: 2 },
 });

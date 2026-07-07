@@ -2,16 +2,18 @@ import React, { useState } from 'react';
 import { ScrollView, Text, View, Pressable, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { recordConsent, hasRequiredConsents } from '@heyhomie/domain';
 import { colors, spacing, typography } from '@heyhomie/design';
 import { Button } from '@heyhomie/ui';
+import { consents } from '../lib/store';
 
 const VERSION = '2025-07-01';
 
 function Check({ label, value, onToggle, required }: { label: string; value: boolean; onToggle: () => void; required?: boolean }) {
     return (
         <Pressable style={styles.row} onPress={onToggle}>
-            <View style={[styles.box, value && styles.boxOn]}>{value ? <Text style={styles.tick}>✓</Text> : null}</View>
+            <View style={[styles.box, value && styles.boxOn]}>{value ? <Ionicons name="checkmark" size={14} color={colors.primary} /> : null}</View>
             <Text style={styles.label}>
                 {label}
                 {required ? <Text style={{ color: colors.pink }}> *</Text> : null}
@@ -39,7 +41,16 @@ export default function Consent() {
                 <Check label="I have read the Privacy Policy" value={privacy} onToggle={() => setPrivacy(v => !v)} required />
                 <Check label="Send me offers and tips (optional)" value={marketing} onToggle={() => setMarketing(v => !v)} />
 
-                <Button label="Continue" variant="teal" disabled={!canContinue} style={{ marginTop: spacing.xl }} onPress={() => router.back()} />
+                <Button
+                    label="Continue"
+                    variant="teal"
+                    disabled={!canContinue}
+                    style={{ marginTop: spacing.xl }}
+                    onPress={async () => {
+                        await consents.save(records);
+                        router.replace('/');
+                    }}
+                />
                 <Text style={styles.note}>You can change marketing preferences anytime in Profile → Privacy &amp; data.</Text>
             </ScrollView>
         </SafeAreaView>
@@ -53,7 +64,6 @@ const styles = StyleSheet.create({
     row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 12 },
     box: { width: 24, height: 24, borderRadius: 6, borderWidth: 1.5, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
     boxOn: { backgroundColor: colors.salad, borderColor: colors.salad },
-    tick: { color: colors.primary, fontWeight: '700' },
     label: { flex: 1, color: colors.primary, fontSize: typography.sizes.small },
     note: { color: colors.grey, fontSize: typography.sizes.caption, marginTop: spacing.md, textAlign: 'center' },
 });

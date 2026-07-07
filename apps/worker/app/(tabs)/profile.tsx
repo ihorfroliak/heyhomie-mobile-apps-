@@ -1,6 +1,7 @@
 import React from 'react';
 import { ScrollView, Text, View, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography } from '@heyhomie/design';
 import { Card } from '@heyhomie/ui';
 
@@ -17,7 +18,10 @@ export default function Profile() {
                         <Text style={styles.avatarText}>OL</Text>
                     </View>
                     <Text style={styles.name}>Olena Kovalenko</Text>
-                    <Text style={styles.verified}>✓ Verified homie</Text>
+                    <View style={styles.verifiedRow}>
+                        <Ionicons name="checkmark-circle" size={14} color={colors.success} />
+                        <Text style={styles.verified}>Verified homie</Text>
+                    </View>
                 </Card>
                 <View style={styles.statsRow}>
                     <Stat value="4.9" label="rating" />
@@ -57,7 +61,8 @@ const styles = StyleSheet.create({
     avatar: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.blue, alignItems: 'center', justifyContent: 'center' },
     avatarText: { color: colors.white, fontWeight: '700', fontSize: 20 },
     name: { fontSize: typography.sizes.h3, fontWeight: '700', color: colors.primary, marginTop: spacing.sm },
-    verified: { color: colors.success, fontWeight: '600', fontSize: typography.sizes.small, marginTop: 4 },
+    verifiedRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+    verified: { color: colors.success, fontWeight: '600', fontSize: typography.sizes.small },
     statsRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.sm },
     stat: { flex: 1, alignItems: 'center', backgroundColor: colors.bgLight, borderRadius: 12, paddingVertical: spacing.md },
     statValue: { fontWeight: '700', color: colors.primary, fontSize: typography.sizes.h3 },

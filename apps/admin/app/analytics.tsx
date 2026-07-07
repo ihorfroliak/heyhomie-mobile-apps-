@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import { ScrollView, Text, View, Pressable, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack } from 'expo-router';
-import { demoAnalyticsMissions } from '@heyhomie/api';
-import { dashboardSummary, withinLastDays, formatMoney, formatDuration, type Locale } from '@heyhomie/domain';
+import { Ionicons } from '@expo/vector-icons';
+import { demoAnalyticsMissions, demoCohortMissions } from '@heyhomie/api';
+import { dashboardSummary, withinLastDays, cohortRetention, formatMoney, formatDuration, type Locale } from '@heyhomie/domain';
 import { colors, spacing, typography } from '@heyhomie/design';
 import { Card, Segmented } from '@heyhomie/ui';
 import { BarChart, Donut } from '../components/Charts';
@@ -19,6 +20,14 @@ export default function Analytics() {
     // Illustrative capacity, scaled to the selected window.
     const capacityDays = period === 'all' ? 30 : Number(period);
     const s = dashboardSummary(missions, { capacityMinutes: 3 * capacityDays * 60 });
+    const cohorts = cohortRetention(demoCohortMissions, 3);
+
+    const retColor = (v: number) => {
+        if (v >= 0.75) return colors.success;
+        if (v >= 0.4) return colors.warning;
+        if (v > 0) return colors.danger;
+        return colors.border;
+    };
 
     return (
         <SafeAreaView style={styles.safe} edges={['top']}>
@@ -83,7 +92,10 @@ export default function Analytics() {
                             <View style={styles.ratingTrack}>
                                 <View style={[styles.ratingFill, { width: `${(c.value / 5) * 100}%` }]} />
                             </View>
-                            <Text style={styles.ratingVal}>{c.value.toFixed(1)} ★</Text>
+                            <View style={styles.ratingValRow}>
+                                <Text style={styles.ratingVal}>{c.value.toFixed(1)}</Text>
+                                <Ionicons name="star" size={11} color={colors.warning} />
+                            </View>
                         </View>
                     ))}
                 </Card>
@@ -98,10 +110,34 @@ export default function Analytics() {
                     </View>
                 ))}
 
+                {/* Cohort retention — first-order month vs repeat activity */}
+                <Text style={styles.section}>Retention by cohort</Text>
+                <Card>
+                    <View style={styles.cohortHead}>
+                        <Text style={[styles.cohortMonth, styles.cohortHeadText]}>Cohort</Text>
+                        <Text style={[styles.cohortSize, styles.cohortHeadText]}>Size</Text>
+                        {['M0', 'M1', 'M2', 'M3'].map(h => (
+                            <Text key={h} style={[styles.cohortCell, styles.cohortHeadText]}>{h}</Text>
+                        ))}
+                    </View>
+                    {cohorts.map(c => (
+                        <View key={c.month} style={styles.cohortRow}>
+                            <Text style={styles.cohortMonth}>{c.month}</Text>
+                            <Text style={styles.cohortSize}>{c.size}</Text>
+                            {c.retention.map((v, k) => (
+                                <View key={k} style={[styles.cohortChip, { backgroundColor: `${retColor(v)}22` }]}>
+                                    <Text style={[styles.cohortChipText, { color: retColor(v) }]}>{pct(v)}</Text>
+                                </View>
+                            ))}
+                        </View>
+                    ))}
+                    <Text style={styles.cohortNote}>M0 = first-order month · each cell = share ordering again that month later.</Text>
+                </Card>
+
                 {/* SECONDARY — collapsed by default so it doesn't crowd the view */}
                 <Pressable style={styles.moreToggle} onPress={() => setShowMore(v => !v)}>
                     <Text style={styles.moreText}>Additional metrics</Text>
-                    <Text style={styles.moreChevron}>{showMore ? '⌃' : '⌄'}</Text>
+                    <Ionicons name={showMore ? 'chevron-up' : 'chevron-down'} size={16} color={colors.grey} />
                 </Pressable>
                 {showMore ? (
                     <View style={styles.moreGrid}>
@@ -149,7 +185,8 @@ const styles = StyleSheet.create({
     ratingCity: { width: 64, color: colors.primary, fontSize: typography.sizes.small },
     ratingTrack: { flex: 1, height: 8, borderRadius: 6, backgroundColor: colors.bgLight, overflow: 'hidden' },
     ratingFill: { height: '100%', backgroundColor: colors.warning },
-    ratingVal: { width: 48, textAlign: 'right', color: colors.grey, fontSize: typography.sizes.caption },
+    ratingValRow: { width: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 3 },
+    ratingVal: { color: colors.grey, fontSize: typography.sizes.caption },
     lbRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
     rank: { color: colors.grey, width: 22, fontSize: typography.sizes.small },
     name: { flex: 1, color: colors.primary, fontWeight: '600', fontSize: typography.sizes.small },
@@ -157,7 +194,15 @@ const styles = StyleSheet.create({
     payout: { color: colors.success, fontWeight: '700', fontSize: typography.sizes.small },
     moreToggle: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing.xl, paddingVertical: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
     moreText: { color: colors.grey, fontSize: typography.sizes.small, fontWeight: '500' },
-    moreChevron: { color: colors.grey, fontSize: 16 },
+    cohortHead: { flexDirection: 'row', alignItems: 'center', paddingBottom: 6, borderBottomWidth: 1, borderBottomColor: colors.border },
+    cohortHeadText: { color: colors.grey, fontSize: typography.sizes.caption, fontWeight: '600' },
+    cohortRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6 },
+    cohortMonth: { width: 62, color: colors.primary, fontSize: typography.sizes.caption },
+    cohortSize: { width: 40, color: colors.grey, fontSize: typography.sizes.caption, textAlign: 'center' },
+    cohortCell: { flex: 1, textAlign: 'center' },
+    cohortChip: { flex: 1, marginHorizontal: 2, borderRadius: 6, paddingVertical: 4, alignItems: 'center' },
+    cohortChipText: { fontSize: typography.sizes.caption, fontWeight: '700' },
+    cohortNote: { color: colors.grey, fontSize: 10, marginTop: spacing.sm },
     moreGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
     mini: { width: '47%', backgroundColor: colors.bgLight, borderRadius: 10, padding: spacing.md },
     miniValue: { fontSize: typography.sizes.h3, fontWeight: '700', color: colors.primary },
