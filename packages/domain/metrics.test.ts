@@ -38,6 +38,17 @@ eq('monthly: only done in month', mp.count, 2);
 eq('monthly gross (override 150 + 70)', mp.gross, 220);
 eq('monthly total = gross + bonus', mp.total, 270);
 
+// shareFor: per-mission rate (e.g. b2b 60% vs employee 70%); override still wins.
+const mpRates = monthlyPayout({
+    missions: payMissions,
+    year: 2025,
+    month: 5,
+    overrides: { A: 150 },
+    shareFor: m => (m.id === 'B' ? 0.5 : undefined),
+});
+eq('shareFor applies per mission (override 150 + 50% of 100)', mpRates.gross, 200);
+eq('shareFor undefined falls back to default share', monthlyPayout({ missions: payMissions, year: 2025, month: 5, shareFor: () => undefined }).gross, 210);
+
 // --- analytics ---
 const set = [
     mk({ id: '1', status: 'done', scheduledAt: '2025-05-01', price: 200, homie: { id: 'h1', firstName: 'Olena' } }),

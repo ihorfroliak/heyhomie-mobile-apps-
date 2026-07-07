@@ -1,0 +1,96 @@
+/**
+ * Aggregated financial report — data + a self-contained HTML renderer.
+ *
+ * The HTML is framework-agnostic: the mobile admin turns it into a PDF via
+ * expo-print, and the web admin can print or server-render the same markup, so a
+ * quarterly / annual report looks identical everywhere.
+ */
+import type { Mission } from './missions';
+import type { PeriodType } from './finance';
+import { financeReportForRange, reportsByMonth, withinRange, type MonthlyExpenses, type VatRate, type DateRange, type MonthlyReport, type MonthReport } from './finance';
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+/** Human label for a period, e.g. "Q2 2025", "2025", "May 2025". */
+export function periodLabel(type: PeriodType, refIso: string, range?: DateRange): string {
+    const d = new Date(`${refIso.slice(0, 10)}T00:00:00Z`);
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth();
+    if (type === 'year') return `${y}`;
+    if (type === 'quarter') return `Q${Math.floor(m / 3) + 1} ${y}`;
+    if (type === 'month') return `${MONTHS[m]} ${y}`;
+    return range ? `${range.start} → ${range.end}` : 'Custom period';
+}
+
+export interface FinancialReportData {
+    title: string;
+    range: DateRange;
+    vat: VatRate;
+    currency: string;
+    report: MonthlyReport;
+    monthly: MonthReport[];
+}
+
+export function financialReportData(opts: {
+    label: string;
+    missions: Mission[];
+    byMonth: Record<string, MonthlyExpenses>;
+    vat: VatRate;
+    range: DateRange;
+    currency?: string;
+}): FinancialReportData {
+    return {
+        title: opts.label,
+        range: opts.range,
+        vat: opts.vat,
+        currency: opts.currency ?? 'PLN',
+        report: financeReportForRange(opts.missions, opts.byMonth, opts.vat, opts.range),
+        monthly: reportsByMonth(withinRange(opts.missions, opts.range.start, opts.range.end), opts.vat),
+    };
+}
+
+const fmt = (n: number, currency: string) => `${Math.round(n).toLocaleString('pl-PL')} ${currency === 'PLN' ? 'zł' : currency}`;
+
+/** Self-contained HTML for PDF/print. Company details are placeholders. */
+export function financialReportHtml(data: FinancialReportData, opts: { companyName?: string } = {}): string {
+    const c = data.currency;
+    const r = data.report;
+    const rows = data.monthly
+        .map(m => `<tr><td>${m.month}</td><td class="r">${m.orders}</td><td class="r">${fmt(m.revenueNet, c)}</td><td class="r">${fmt(m.grossMargin, c)}</td></tr>`)
+        .join('');
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>
+* { font-family: Arial, sans-serif; color: #14133a; }
+body { padding: 28px; }
+h1 { font-size: 22px; margin: 0; }
+.sub { color: #727189; font-size: 12px; margin: 4px 0 20px; }
+.kpis { width: 100%; border-collapse: collapse; margin-bottom: 18px; }
+.kpis td { width: 25%; background: #f4f7ff; padding: 12px; border: 4px solid #fff; border-radius: 8px; }
+.kpis .l { font-size: 11px; color: #727189; }
+.kpis .v { font-size: 18px; font-weight: bold; }
+table.data { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.data th { background: #14133a; color: #fff; text-align: left; padding: 7px 8px; }
+table.data td { padding: 7px 8px; border-bottom: 1px solid #e2e2eb; }
+table.data td.r, table.data th.r { text-align: right; }
+.total { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; }
+.profit { font-weight: bold; }
+.foot { color: #9aa0b4; font-size: 10px; margin-top: 24px; }
+</style></head><body>
+<h1>${opts.companyName ?? 'HeyHomie'} — financial report</h1>
+<div class="sub">${data.title} &nbsp;·&nbsp; ${data.range.start} → ${data.range.end} &nbsp;·&nbsp; VAT ${data.vat}%</div>
+<table class="kpis"><tr>
+  <td><div class="l">Revenue (net)</div><div class="v">${fmt(r.revenueNet, c)}</div></td>
+  <td><div class="l">Expenses</div><div class="v">${fmt(r.expenses, c)}</div></td>
+  <td><div class="l">Gross margin</div><div class="v">${r.grossMarginPct}%</div></td>
+  <td><div class="l">Orders</div><div class="v">${r.orders}</div></td>
+</tr></table>
+<div class="total"><span>Revenue (gross)</span><span>${fmt(r.revenueGross, c)}</span></div>
+<div class="total"><span>VAT</span><span>${fmt(r.vat, c)}</span></div>
+<div class="total"><span>Worker payouts</span><span>− ${fmt(r.workerPayouts, c)}</span></div>
+<div class="total"><span>Gross margin</span><span>${fmt(r.grossMargin, c)}</span></div>
+<div class="total"><span>Expenses</span><span>− ${fmt(r.expenses, c)}</span></div>
+<div class="total profit"><span>Net profit (delta)</span><span>${fmt(r.netProfit, c)} · ${r.netProfitPct}%</span></div>
+<h3 style="font-size:14px;margin:22px 0 8px;">Monthly breakdown</h3>
+<table class="data"><thead><tr><th>Month</th><th class="r">Orders</th><th class="r">Revenue (net)</th><th class="r">Gross margin</th></tr></thead><tbody>${rows}</tbody></table>
+<div class="foot">Generated by HeyHomie admin. Figures are indicative until reconciled with accounting.</div>
+</body></html>`;
+}

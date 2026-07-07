@@ -25,6 +25,10 @@ export const frequencyLabel: Record<Frequency, Localized> = {
     weekly: L('Co tydzień', 'Weekly', 'Щотижня'),
     biweekly: L('Co dwa tygodnie', 'Bi-weekly', 'Раз на два тижні'),
     monthly: L('Co miesiąc', 'Monthly', 'Щомісяця'),
+    every_workday: L('W dni robocze (pn–pt)', 'Every workday (Mon–Fri)', 'Щобудня (пн–пт)'),
+    twice_week: L('Dwa razy w tygodniu', 'Twice a week', 'Двічі на тиждень'),
+    thrice_week: L('Trzy razy w tygodniu', 'Three times a week', 'Тричі на тиждень'),
+    every_other_day: L('Co drugi dzień', 'Every other day', 'Кожен другий день'),
 };
 
 /** Minutes -> "3h 00m" (or "45m" under an hour). */

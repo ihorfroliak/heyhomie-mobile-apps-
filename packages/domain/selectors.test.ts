@@ -1,5 +1,5 @@
 /** Run with: npx -y tsx packages/domain/selectors.test.ts */
-import { splitMissions, missionTimeline, workerAction, adminStats } from './selectors';
+import { splitMissions, missionTimeline, workerAction, adminStats, missionTimes } from './selectors';
 import type { Mission, MissionStatus } from './missions';
 
 let passed = 0;
@@ -56,6 +56,13 @@ ok('adminStats total', stats.total === 4);
 ok('adminStats live = homie_found + in_progress', stats.live === 2);
 ok('adminStats searching', stats.searching === 1);
 ok('adminStats revenue counts done only', stats.revenue === 189 && stats.done === 1);
+
+// --- mission work times (worker sees time, not money) ---
+const mt = missionTimes(m('t1', 'homie_found', '2025-05-19'));
+ok('scheduledEnd = start + 3h', mt.scheduledEnd === '2025-05-19T03:00:00.000Z');
+ok('no actual times before check-in', mt.actualStart === undefined && mt.actualEnd === undefined);
+const mt2 = missionTimes({ ...m('t2', 'done', '2025-05-19'), checkInAt: '2025-05-19T10:02:00Z', checkOutAt: '2025-05-19T13:05:00Z' } as any);
+ok('actual times from check-in/out', mt2.actualStart === '2025-05-19T10:02:00Z' && mt2.actualEnd === '2025-05-19T13:05:00Z');
 
 console.log(`\n${passed} passed, ${fail.length} failed`);
 if (fail.length) { fail.forEach(f => console.log('  FAIL: ' + f)); process.exit(1); }

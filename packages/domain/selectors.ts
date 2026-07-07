@@ -21,6 +21,30 @@ export function splitMissions(missions: Mission[]): SplitMissions {
     };
 }
 
+export interface MissionTimes {
+    /** Planned start / end (end = start + duration). */
+    scheduledStart: string;
+    scheduledEnd: string;
+    /** Actual times from the worker's check-in / check-out (if any). */
+    actualStart?: string;
+    actualEnd?: string;
+}
+
+/**
+ * Work-time facts for a mission — what the worker app shows instead of money
+ * (planned vs. actual start/end). Money is intentionally excluded here.
+ */
+export function missionTimes(m: Mission): MissionTimes {
+    const start = new Date(m.scheduledAt);
+    const end = new Date(start.getTime() + m.durationMinutes * 60_000);
+    return {
+        scheduledStart: m.scheduledAt,
+        scheduledEnd: end.toISOString(),
+        actualStart: m.checkInAt,
+        actualEnd: m.checkOutAt,
+    };
+}
+
 export interface AdminStats {
     total: number;
     live: number; // homie_found or in_progress
