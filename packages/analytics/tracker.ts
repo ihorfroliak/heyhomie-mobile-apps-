@@ -53,4 +53,17 @@ export function multiTracker(trackers: Tracker[]): Tracker {
  *     track: (e) => gtag('event', e.name, e),
  *     identify: (id) => gtag('set', { user_id: id }),
  *   });
+ *
+ * HEATMAPS / session analytics: the typed 'tap' (with 0–1 x/y), 'screen_view'
+ * (with durationMs) and 'funnel_step' events feed a heatmap/session provider.
+ * Wire a provider adapter the same way, e.g. PostHog, Microsoft Clarity or UXCam
+ * for React Native:
+ *
+ *   export const heatmapTracker = (posthog): Tracker => ({
+ *     track: (e) => posthog.capture(e.name, e),   // taps/screens build the heatmap
+ *     identify: (id, traits) => posthog.identify(id, traits),
+ *   });
+ *
+ * Combine with multiTracker([gaTracker, heatmapTracker]) so product analytics
+ * and heatmaps receive the same event stream.
  */

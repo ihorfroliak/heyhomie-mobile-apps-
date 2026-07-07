@@ -4,7 +4,12 @@
  * notifications speak the same language.
  */
 export type AnalyticsEvent =
-    | { name: 'screen_view'; screen: string }
+    | { name: 'screen_view'; screen: string; durationMs?: number }
+    /** Heatmap tap — x/y are 0–1 fractions of the screen for device independence. */
+    | { name: 'tap'; screen: string; target: string; x?: number; y?: number }
+    | { name: 'funnel_step'; stage: string; serviceId?: string }
+    | { name: 'booking_abandoned'; stage: string; serviceId?: string }
+    | { name: 'lead_captured'; source: string; serviceId?: string }
     | { name: 'mission_booked'; plan: string; minutes: number; addOns: number }
     | { name: 'mission_assigned'; missionId: string; homieId: string }
     | { name: 'mission_started'; missionId: string }
