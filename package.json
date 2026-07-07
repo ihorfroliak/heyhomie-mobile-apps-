@@ -5,13 +5,18 @@
   "description": "HeyHomie cross-platform app ecosystem — client, worker and admin (React Native + Expo monorepo).",
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "server"
   ],
   "scripts": {
     "client": "npm --workspace heyhomie-client-app run start",
     "worker": "npm --workspace heyhomie-worker-app run start",
     "admin": "npm --workspace heyhomie-admin-app run start",
-    "test": "npx -y tsx packages/api/logic.test.ts && npx -y tsx packages/domain/i18n.test.ts"
+    "server": "npm --workspace @heyhomie/server run start",
+    "test": "node tools/run-tests.mjs",
+    "typecheck": "npx -y -p typescript@5.6.3 tsc --noEmit -p tsconfig.check.json",
+    "check:apps": "node tools/check-apps.mjs",
+    "check": "npm test && npm run typecheck && npm run check:apps"
   },
   "engines": {
     "node": ">=20"
