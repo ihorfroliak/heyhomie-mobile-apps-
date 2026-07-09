@@ -1,6 +1,6 @@
 /** REST + SSE routes. 1:1 with the OrderGateway HTTP port. Tenant-enforced. */
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { toContractOrder, type OrderService, type ServerOrder, type SubmitOrderInput } from '@heyhomie/api';
+import { toContractOrder, NotFoundError, type OrderService, type ServerOrder, type SubmitOrderInput } from '@heyhomie/api';
 import { reqAuth } from './auth.js';
 
 export function registerRoutes(app: FastifyInstance, service: OrderService): void {
@@ -9,9 +9,9 @@ export function registerRoutes(app: FastifyInstance, service: OrderService): voi
 
     // list / get (tenant-scoped)
     app.get('/orders', async (req) => (await service.list(reqAuth(req))).map(toContractOrder));
-    app.get<{ Params: { id: string } }>('/orders/:id', async (req, reply) => {
+    app.get<{ Params: { id: string } }>('/orders/:id', async (req) => {
         const o = await service.get(req.params.id, reqAuth(req));
-        if (!o) return reply.code(404).send({ error: 'not found' });
+        if (!o) throw new NotFoundError();
         return toContractOrder(o);
     });
 

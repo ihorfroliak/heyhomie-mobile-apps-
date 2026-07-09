@@ -15,9 +15,12 @@ export interface AuthContext {
     role: Role;
 }
 
+import { ForbiddenTenantError } from './errors';
+
 export const FORBIDDEN_TENANT_ACCESS = 'FORBIDDEN_TENANT_ACCESS';
 
-export class AuthError extends Error {
+/** Tenant-access denial — a canonical AppError (403). Message kept stable. */
+export class AuthError extends ForbiddenTenantError {
     constructor(message: string = FORBIDDEN_TENANT_ACCESS) {
         super(message);
         this.name = 'AuthError';

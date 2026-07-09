@@ -7,7 +7,7 @@
  * shutdown. The process never boots with invalid configuration.
  */
 import Fastify from 'fastify';
-import { makeOrderService, loadServerConfig, ConfigError, FORBIDDEN_TENANT_ACCESS, type AuthContext, type Role } from '@heyhomie/api';
+import { makeOrderService, loadServerConfig, ConfigError, fromUnknown, type AuthContext, type Role } from '@heyhomie/api';
 import { makePool, initSchema } from './db.js';
 import { pgOrderRepo } from './pgRepo.js';
 import { registerRoutes, registerStream } from './routes.js';
@@ -25,9 +25,12 @@ async function main() {
 
     const app = Fastify({ logger: true });
 
-    app.setErrorHandler((err, _req, reply) => {
-        if (err.message === FORBIDDEN_TENANT_ACCESS) return reply.code(403).send({ error: FORBIDDEN_TENANT_ACCESS });
-        reply.code(500).send({ error: 'internal_error' });
+    // Every error → a canonical, client-safe response. Raw errors never leak.
+    app.setErrorHandler((err, req, reply) => {
+        const tenantId = (req as typeof req & { auth?: AuthContext }).auth?.tenantId;
+        const ae = fromUnknown(err).withContext(req.id, tenantId);
+        req.log.error({ err, internalCode: ae.internalCode, httpStatus: ae.httpStatus, requestId: req.id, tenantId }, 'request_error');
+        reply.code(ae.httpStatus).send(ae.toResponse());
     });
 
     // Liveness: process is up (no dependency checks — used by orchestrators to
