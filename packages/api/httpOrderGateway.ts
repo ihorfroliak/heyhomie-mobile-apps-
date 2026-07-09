@@ -9,6 +9,7 @@
  * the contract test proves the mapping without a live server.
  */
 import type { Order, OrderGateway, SubmitOrderInput, SubmitOrderResult } from './orderContract';
+import { HttpStatusError, RetryBudget, backoffDelay, dedupe, withRetry, withTimeout } from './httpResilience';
 
 export interface OrderBackendPort {
     /** Subscribe to full-snapshot updates; emits the initial snapshot on connect. */
@@ -63,9 +64,18 @@ export function makeHttpOrderGateway(port: OrderBackendPort): OrderGateway {
 type FetchLike = typeof fetch;
 interface EventSourceLike {
     onmessage: ((ev: { data: string }) => void) | null;
+    onerror?: ((ev?: unknown) => void) | null;
     close(): void;
 }
 type EventSourceFactory = (url: string) => EventSourceLike;
+
+/** Injectable timers so reconnect/heartbeat logic is deterministically testable. */
+export interface TimerHost {
+    set: (fn: () => void, ms: number) => unknown;
+    clear: (handle: unknown) => void;
+    now: () => number;
+}
+const realTimers: TimerHost = { set: (fn, ms) => setTimeout(fn, ms), clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>), now: () => Date.now() };
 
 export interface HttpPortConfig {
     baseUrl: string;
@@ -75,37 +85,106 @@ export interface HttpPortConfig {
     fetchImpl?: FetchLike;
     /** SSE factory; defaults to global EventSource where available. */
     eventSource?: EventSourceFactory;
+    /** Per-request timeout (ms). Default 10s. */
+    timeoutMs?: number;
+    /** Retry tuning for idempotent requests. */
+    retry?: { maxRetries?: number; baseMs?: number; maxMs?: number; maxWindowMs?: number };
+    /** Stream: consider the connection dead if no frame/heartbeat within this window. */
+    heartbeatMs?: number;
+    /** Stream reconnect backoff bounds. */
+    reconnectBaseMs?: number;
+    reconnectMaxMs?: number;
+    timers?: TimerHost;
 }
 
-/** Maps the OrderGateway port to REST endpoints + the `/orders/stream` SSE feed. */
+/** Maps the OrderGateway port to REST endpoints + the `/orders/stream` SSE feed,
+ *  with timeouts, bounded retries on idempotent ops, dedupe, and a self-healing
+ *  stream (reconnect + heartbeat watchdog). */
 export function httpOrderPort(config: HttpPortConfig): OrderBackendPort {
     const base = config.baseUrl.replace(/\/$/, '');
     const doFetch: FetchLike = config.fetchImpl ?? (globalThis.fetch as FetchLike);
+    const timers = config.timers ?? realTimers;
+    const timeoutMs = config.timeoutMs ?? 10_000;
+    const heartbeatMs = config.heartbeatMs ?? 30_000;
+    const reconnectBaseMs = config.reconnectBaseMs ?? 500;
+    const reconnectMaxMs = config.reconnectMaxMs ?? 15_000;
+    const rOpts = {
+        maxRetries: config.retry?.maxRetries ?? 3,
+        baseMs: config.retry?.baseMs ?? 200,
+        maxMs: config.retry?.maxMs ?? 3_000,
+        maxWindowMs: config.retry?.maxWindowMs ?? 15_000,
+    };
+    const budget = new RetryBudget(20, 5); // shared cap: no retry storms
+    const dedup = dedupe();
+
     const authHeaders = (): Record<string, string> => {
         const t = config.getToken();
         return { 'content-type': 'application/json', ...(t ? { authorization: `Bearer ${t}` } : {}) };
     };
-    const post = async (path: string, body?: unknown): Promise<Response> =>
-        doFetch(`${base}${path}`, { method: 'POST', headers: authHeaders(), body: body ? JSON.stringify(body) : undefined });
+    const rawPost = (path: string, body: unknown, signal: AbortSignal) =>
+        doFetch(`${base}${path}`, { method: 'POST', headers: authHeaders(), body: body !== undefined ? JSON.stringify(body) : undefined, signal }).then(res => {
+            if (!res.ok) throw new HttpStatusError(res.status, `POST ${path} → ${res.status}`);
+            return res;
+        });
+
+    const once = (path: string, body?: unknown) => withTimeout(signal => rawPost(path, body, signal), timeoutMs);
+    /** Idempotent mutation: retried within budget + deduped by (op,id) against double-fire. */
+    const idempotent = (path: string, key: string, body?: unknown) =>
+        dedup(key, () => withRetry(() => once(path, body), { ...rOpts, budget }));
 
     return {
         connect(onSnapshot) {
-            // EventSource can't set headers in browsers — the token rides as a query
-            // param, verified server-side (same trust boundary as the Bearer header).
-            const t = config.getToken();
-            const url = `${base}/orders/stream${t ? `?token=${encodeURIComponent(t)}` : ''}`;
-            const factory = config.eventSource ?? ((u: string) => new (globalThis as unknown as { EventSource: new (u: string) => EventSourceLike }).EventSource(u));
-            const es = factory(url);
-            es.onmessage = (ev) => {
-                try { onSnapshot(JSON.parse(ev.data) as Order[]); } catch { /* skip malformed frame */ }
+            let es: EventSourceLike | null = null;
+            let attempt = 0;
+            let hbHandle: unknown = null;
+            let reconnectHandle: unknown = null;
+            let lastMsg = timers.now();
+            let closed = false;
+
+            const stopTimers = () => {
+                if (hbHandle) { timers.clear(hbHandle); hbHandle = null; }
+                if (reconnectHandle) { timers.clear(reconnectHandle); reconnectHandle = null; }
             };
-            return () => es.close();
+            const scheduleReconnect = () => {
+                if (closed) return;
+                stopTimers();
+                try { es?.close(); } catch { /* ignore */ }
+                es = null;
+                const delay = backoffDelay(attempt++, { baseMs: reconnectBaseMs, maxMs: reconnectMaxMs });
+                reconnectHandle = timers.set(open, delay);
+            };
+            const watchHeartbeat = () => {
+                if (closed) return;
+                if (timers.now() - lastMsg > heartbeatMs * 2) { scheduleReconnect(); return; } // dead connection
+                hbHandle = timers.set(watchHeartbeat, heartbeatMs);
+            };
+            function open() {
+                if (closed) return;
+                const t = config.getToken();
+                // Full-snapshot frames make replay trivial: (re)connect always re-emits
+                // current state, so no missed-event cursor is needed.
+                const url = `${base}/orders/stream${t ? `?token=${encodeURIComponent(t)}` : ''}`;
+                const factory = config.eventSource ?? ((u: string) => new (globalThis as unknown as { EventSource: new (u: string) => EventSourceLike }).EventSource(u));
+                es = factory(url);
+                lastMsg = timers.now();
+                es.onmessage = (ev) => {
+                    lastMsg = timers.now();
+                    attempt = 0; // healthy frame resets backoff
+                    try { onSnapshot(JSON.parse(ev.data) as Order[]); } catch { /* skip malformed frame */ }
+                };
+                es.onerror = () => scheduleReconnect();
+                hbHandle = timers.set(watchHeartbeat, heartbeatMs);
+            }
+
+            open();
+            return () => { closed = true; stopTimers(); try { es?.close(); } catch { /* ignore */ } es = null; };
         },
-        submit: async (input) => (await post('/orders', input)).json() as Promise<SubmitOrderResult>,
-        confirm: async (id) => { await post(`/orders/${id}/confirm`); },
-        cancel: async (id) => { await post(`/orders/${id}/cancel`); },
-        complete: async (id, completedAt) => { await post(`/orders/${id}/complete`, { completedAt }); },
-        settle: async (id, now) => { await post(`/orders/${id}/settle`, { now }); },
-        markPaid: async (id) => { await post(`/orders/${id}/mark-paid`); },
+        // create is NOT idempotent → timeout only, never auto-retried (avoids dup orders).
+        submit: async (input) => (await once('/orders', input)).json() as Promise<SubmitOrderResult>,
+        confirm: async (id) => { await idempotent(`/orders/${id}/confirm`, `confirm:${id}`); },
+        cancel: async (id) => { await idempotent(`/orders/${id}/cancel`, `cancel:${id}`); },
+        complete: async (id, completedAt) => { await idempotent(`/orders/${id}/complete`, `complete:${id}`, { completedAt }); },
+        settle: async (id, now) => { await idempotent(`/orders/${id}/settle`, `settle:${id}`, { now }); },
+        markPaid: async (id) => { await idempotent(`/orders/${id}/mark-paid`, `markPaid:${id}`); },
     };
 }

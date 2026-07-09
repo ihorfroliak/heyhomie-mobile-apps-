@@ -52,6 +52,9 @@ export function registerStream(app: FastifyInstance, service: OrderService): voi
         };
         await send(); // initial snapshot (tenant-scoped)
         const unsub = service.subscribe(() => { void send(); });
-        req.raw.on('close', () => unsub());
+        // Heartbeat comment keeps the connection alive through proxies and lets the
+        // client's watchdog detect a dead link. Cleared on close (no timer leak).
+        const heartbeat = setInterval(() => reply.raw.write(': ping\n\n'), 15_000);
+        req.raw.on('close', () => { clearInterval(heartbeat); unsub(); });
     });
 }

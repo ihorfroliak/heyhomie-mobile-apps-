@@ -29,7 +29,9 @@ Full diagram: [PROJECT_STATE.md §2](PROJECT_STATE.md).
 |---|---|
 | [orderContract.ts](../packages/api/orderContract.ts) | FROZEN `OrderGateway` interface + `Order`/`OrderStatus`. Never change w/o a new build. |
 | [orderGateway.ts](../packages/api/orderGateway.ts) | Local adapter (wraps private store) + active `orderGateway` binding. |
-| [httpOrderGateway.ts](../packages/api/httpOrderGateway.ts) | `makeHttpOrderGateway(port)` + real `httpOrderPort` (fetch+SSE, carries token). |
+| [httpOrderGateway.ts](../packages/api/httpOrderGateway.ts) | `makeHttpOrderGateway(port)` + real `httpOrderPort` (fetch+SSE, token, timeouts/retry/dedupe, self-healing stream). |
+| [httpResilience.ts](../packages/api/httpResilience.ts) | Pure resilience: `withRetry`/`withTimeout`/`backoffDelay`/`RetryBudget`/`dedupe`/`HttpStatusError`. |
+| [serverConfig.ts](../packages/api/serverConfig.ts) | Fail-fast env validation (`loadServerConfig`, `ConfigError`). |
 | [fakeBackend.ts](../packages/api/fakeBackend.ts) | In-process port over real `orderService` — lets contract test run http path w/o a server. |
 | [orderService.ts](../packages/api/orderService.ts) | Authoritative engine: transitions + tenant enforcement + repo-injected (`memoryOrderRepo`). |
 | [auth.ts](../packages/api/auth.ts) | Pure `AuthContext`, `FORBIDDEN_TENANT_ACCESS`, `requireOwned`. No crypto (RN-safe). |
@@ -91,7 +93,7 @@ Key ones: [catalog.ts](../packages/domain/catalog.ts) (services+details) ·
 - **Build 03A:** OrderGateway inversion. Store hidden from barrel + anti-dep guard. UI store-free. Fixed id-collision bug (`uid()`).
 - **Build 04:** Http adapter + real Fastify/pg server. Proven drop-in via in-process fake (same lifecycle both adapters). Default binding stays Local (no live server = would regress).
 - **Build 05:** Auth + tenant isolation, orthogonal (contract unchanged). Service+repo enforce; HMAC token boundary on server. tenantId never in contract Order.
-- **Build 06 (in progress):** production hardening — see [PROJECT_STATE.md §8](PROJECT_STATE.md). Frozen contract, no features.
+- **Build 06 (in progress):** production hardening. Done: (1-2) fail-fast config + health probes + graceful shutdown + Docker/compose; (Gateway reliability) timeouts/retry/backoff/jitter/budget/dedupe + self-healing SSE (reconnect+heartbeat) + server heartbeat. Frozen contract, no features. Remaining: canonical errors, DB reliability, concurrency/memory audits, metrics/logging/tracing, security hardening, more tests.
 
 ## Hard rules (do not violate)
 1. Never change `OrderGateway` contract without a new build.
