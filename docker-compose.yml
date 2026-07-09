@@ -1,0 +1,38 @@
+# HeyHomie orders backend + Postgres. One command to a running, healthy stack:
+#   docker compose up --build
+# Smoke: curl localhost:8090/health/ready
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: heyhomie
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d heyhomie"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/heyhomie
+      PORT: "8090"
+      # Override in a real deploy. Must be >=16 chars; default is dev-only.
+      AUTH_SECRET: ${AUTH_SECRET:-dev-secret-change-me-16+}
+      AUTH_DEV_MODE: ${AUTH_DEV_MODE:-1}
+    ports:
+      - "8090:8090"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata: {}

@@ -1,0 +1,14 @@
+# Keep the build context small — the server image needs only packages/* + server/.
+**/node_modules
+apps
+.expo
+.git
+.github
+docs
+legal
+scripts
+tools
+*.log
+**/.env
+**/.env.*
+!**/.env.example
