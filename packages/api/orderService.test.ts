@@ -21,7 +21,8 @@ function spyRepo(inner: OrderRepo): { repo: OrderRepo; calls: { op: string; tena
         calls,
         repo: {
             get: (id, t) => { calls.push({ op: 'get', tenantId: t }); return inner.get(id, t); },
-            put: (o: ServerOrder) => { calls.push({ op: 'put', tenantId: o.tenantId }); return inner.put(o); },
+            insert: (o: ServerOrder) => { calls.push({ op: 'insert', tenantId: o.tenantId }); return inner.insert(o); },
+            update: (o: ServerOrder, v: number) => { calls.push({ op: 'update', tenantId: o.tenantId }); return inner.update(o, v); },
             list: (t) => { calls.push({ op: 'list', tenantId: t }); return inner.list(t); },
         },
     };

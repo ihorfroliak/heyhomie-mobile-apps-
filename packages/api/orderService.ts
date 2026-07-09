@@ -25,12 +25,16 @@ import {
 } from '../domain';
 import type { Order, OrderStatus, SubmitOrderInput, SubmitOrderResult } from './orderContract';
 import { requireOwned, type AuthContext } from './auth';
+import { ConflictError } from './errors';
 
 export type ServerOrderStatus = 'draft' | 'confirmed' | 'canceled' | 'paid' | 'settled';
 
 export interface ServerOrder {
     id: string;
     tenantId: string; // server-side only — never in the contract Order
+    /** Optimistic-concurrency version. Bumped on every write; the compare-and-swap
+     *  in `update` rejects a stale write → no lost updates under parallel requests. */
+    version: number;
     status: ServerOrderStatus;
     createdAt: string;
     updatedAt: string;
@@ -45,14 +49,19 @@ export interface ServerOrder {
     };
 }
 
-/** Repo is ALWAYS tenant-scoped — no unscoped read/write exists. */
+/**
+ * Repo is ALWAYS tenant-scoped — no unscoped read/write exists — and updates are
+ * optimistic: `update(next, expectedVersion)` writes only if the row is still at
+ * `expectedVersion`, else throws ConflictError. The service retries on conflict.
+ */
 export interface OrderRepo {
     get(id: string, tenantId: string): Promise<ServerOrder | undefined>;
-    put(order: ServerOrder): Promise<void>;
+    insert(order: ServerOrder): Promise<void>;
+    update(order: ServerOrder, expectedVersion: number): Promise<ServerOrder>;
     list(tenantId: string): Promise<ServerOrder[]>;
 }
 
-/** In-memory repo (tests / the in-process fake backend). Tenant-scoped. */
+/** In-memory repo (tests / the in-process fake backend). Tenant-scoped + CAS. */
 export function memoryOrderRepo(): OrderRepo {
     const map = new Map<string, ServerOrder>();
     return {
@@ -60,7 +69,18 @@ export function memoryOrderRepo(): OrderRepo {
             const o = map.get(id);
             return o && o.tenantId === tenantId ? o : undefined;
         },
-        async put(o) { map.set(o.id, o); },
+        async insert(o) {
+            if (map.has(o.id)) throw new ConflictError('duplicate order id');
+            map.set(o.id, o);
+        },
+        async update(o, expectedVersion) {
+            const cur = map.get(o.id);
+            // compare-and-swap: reject stale writers (lost-update guard).
+            if (!cur || cur.tenantId !== o.tenantId || cur.version !== expectedVersion) throw new ConflictError('version conflict');
+            const next = { ...o, version: expectedVersion + 1 };
+            map.set(o.id, next);
+            return next;
+        },
         async list(tenantId) { return [...map.values()].filter(o => o.tenantId === tenantId); },
     };
 }
@@ -103,20 +123,66 @@ export interface OrderService {
 let seq = 0;
 const uid = (p: string) => `${p}-${Date.now()}-${++seq}`;
 
+/** Max optimistic retries. Losers become idempotent no-ops fast, so this is
+ *  ample even for hundreds of contenders on one row. */
+const MAX_CAS_RETRIES = 100;
+
+/**
+ * Pure state transitions (no I/O). Each returns the SAME object reference when it
+ * is a no-op (→ the service skips the write), or a new one to persist. Terminal
+ * invariants live here so they hold regardless of caller: a canceled order takes
+ * no money transition; a paid order can't be canceled (would need a refund flow).
+ */
+type Transition = (o: ServerOrder, at: string) => ServerOrder;
+
+const confirmT: Transition = (o) => (o.status === 'canceled' ? { ...o, status: 'confirmed' } : o);
+const cancelT: Transition = (o) => (o.status === 'canceled' || o.payload.payment.status === 'paid' ? o : { ...o, status: 'canceled' });
+const completeT = (completedAt: string): Transition => (o, at) => {
+    if (o.status === 'canceled' || o.payload.payment.status !== 'awaiting_completion') return o;
+    return { ...o, status: 'settled', payload: { ...o.payload, payment: markDue(o.payload.payment, completedAt || at) } };
+};
+const settleT: Transition = (o, at) => {
+    if (o.status === 'canceled') return o;
+    const p = o.payload.payment;
+    if (p.status === 'due') {
+        const charged = runCharge(p, at);
+        return { ...o, status: charged.status === 'paid' ? 'paid' : 'settled', payload: { ...o.payload, payment: charged } };
+    }
+    if (p.status === 'link_sent') return { ...o, status: 'paid', payload: { ...o.payload, payment: domainMarkPaid(p, at) } };
+    return o;
+};
+const markPaidT: Transition = (o, at) => {
+    if (o.status === 'canceled' || o.payload.payment.status === 'paid') return o;
+    return { ...o, status: 'paid', payload: { ...o.payload, payment: domainMarkPaid(o.payload.payment, at) } };
+};
+
 export function makeOrderService(repo: OrderRepo): OrderService {
     const listeners = new Set<() => void>();
     const emit = () => listeners.forEach(l => l());
 
-    const save = async (o: ServerOrder, now: string): Promise<ServerOrder> => {
-        const next = { ...o, updatedAt: now };
-        await repo.put(next);
-        emit();
-        return next;
+    /**
+     * Optimistic read-modify-write: read → apply the pure transition → CAS. On a
+     * version conflict, re-read and re-apply — because transitions are idempotent
+     * this converges to exactly-once effect (a loser re-reads the winner's state
+     * and its transition becomes a no-op). Deny cross-tenant before any work.
+     */
+    const mutate = async (id: string, auth: AuthContext, transition: Transition): Promise<ServerOrder> => {
+        for (let i = 0; i < MAX_CAS_RETRIES; i++) {
+            const cur = requireOwned(await repo.get(id, auth.tenantId), auth);
+            const at = new Date().toISOString();
+            const next = transition(cur, at);
+            if (next === cur) return cur; // no-op → no write, no version bump
+            try {
+                const saved = await repo.update({ ...next, updatedAt: at }, cur.version);
+                emit();
+                return saved;
+            } catch (e) {
+                if (e instanceof ConflictError) continue; // stale — re-read and retry
+                throw e;
+            }
+        }
+        throw new ConflictError('order update contention exceeded retry budget');
     };
-
-    /** Load an order the caller is allowed to mutate, else deny (no existence leak). */
-    const owned = async (id: string, auth: AuthContext): Promise<ServerOrder> =>
-        requireOwned(await repo.get(id, auth.tenantId), auth);
 
     return {
         async create(input, auth) {
@@ -131,12 +197,13 @@ export function makeOrderService(repo: OrderRepo): OrderService {
             const order: ServerOrder = {
                 id,
                 tenantId: auth.tenantId,
+                version: 1,
                 status: 'confirmed',
                 createdAt: now,
                 updatedAt: now,
                 payload: { clientId, serviceId: input.serviceId, cityId: input.cityId, contact: input.contact, delivery, paymentMethod: method, payment },
             };
-            await repo.put(order);
+            await repo.insert(order);
             emit();
             const account = { id: clientId, firstName: (input.firstName ?? '').trim() || 'Friend', phone: input.contact.phone, email: input.contact.email, createdAt: now };
             const draft = { id, clientId, contact: input.contact, cityId: input.cityId, serviceId: input.serviceId, stage: 'confirmed' as const, updatedAt: now, delivery };
@@ -144,43 +211,11 @@ export function makeOrderService(repo: OrderRepo): OrderService {
         },
         get: (id, auth) => repo.get(id, auth.tenantId),
         list: (auth) => repo.list(auth.tenantId),
-        async confirm(id, auth) {
-            const o = await owned(id, auth);
-            if (o.status === 'canceled') return save({ ...o, status: 'confirmed' }, new Date().toISOString());
-            return o; // idempotent
-        },
-        async cancel(id, auth) {
-            const o = await owned(id, auth);
-            if (o.status === 'canceled') return o;
-            return save({ ...o, status: 'canceled' }, new Date().toISOString());
-        },
-        async complete(id, auth, completedAt) {
-            const o = await owned(id, auth);
-            if (o.payload.payment.status !== 'awaiting_completion') return o;
-            const at = completedAt ?? new Date().toISOString();
-            const payment = markDue(o.payload.payment, at);
-            return save({ ...o, status: 'settled', payload: { ...o.payload, payment } }, at);
-        },
-        async settle(id, auth, now) {
-            const o = await owned(id, auth);
-            const at = now ?? new Date().toISOString();
-            const p = o.payload.payment;
-            if (p.status === 'due') {
-                const charged = runCharge(p, at);
-                const status: ServerOrderStatus = charged.status === 'paid' ? 'paid' : 'settled';
-                return save({ ...o, status, payload: { ...o.payload, payment: charged } }, at);
-            }
-            if (p.status === 'link_sent') {
-                return save({ ...o, status: 'paid', payload: { ...o.payload, payment: domainMarkPaid(p, at) } }, at);
-            }
-            return o;
-        },
-        async markPaid(id, auth, now) {
-            const o = await owned(id, auth);
-            if (o.payload.payment.status === 'paid') return o;
-            const at = now ?? new Date().toISOString();
-            return save({ ...o, status: 'paid', payload: { ...o.payload, payment: domainMarkPaid(o.payload.payment, at) } }, at);
-        },
+        confirm: (id, auth) => mutate(id, auth, confirmT),
+        cancel: (id, auth) => mutate(id, auth, cancelT),
+        complete: (id, auth, completedAt) => mutate(id, auth, completeT(completedAt ?? '')),
+        settle: (id, auth) => mutate(id, auth, settleT),
+        markPaid: (id, auth) => mutate(id, auth, markPaidT),
         subscribe(l) {
             listeners.add(l);
             return () => listeners.delete(l);

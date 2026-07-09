@@ -94,7 +94,7 @@ Key ones: [catalog.ts](../packages/domain/catalog.ts) (services+details) ·
 - **Build 03A:** OrderGateway inversion. Store hidden from barrel + anti-dep guard. UI store-free. Fixed id-collision bug (`uid()`).
 - **Build 04:** Http adapter + real Fastify/pg server. Proven drop-in via in-process fake (same lifecycle both adapters). Default binding stays Local (no live server = would regress).
 - **Build 05:** Auth + tenant isolation, orthogonal (contract unchanged). Service+repo enforce; HMAC token boundary on server. tenantId never in contract Order.
-- **Build 06 (in progress):** production hardening. Done: (1-2) fail-fast config + health probes + graceful shutdown + Docker/compose; (Gateway reliability) timeouts/retry/backoff/jitter/budget/dedupe + self-healing SSE (reconnect+heartbeat) + server heartbeat. Frozen contract, no features. Remaining: canonical errors, DB reliability, concurrency/memory audits, metrics/logging/tracing, security hardening, more tests.
+- **Build 06 (in progress):** production hardening. Done: config fail-fast + health probes + graceful shutdown + Docker/compose; gateway resilience (timeouts/retry/backoff/jitter/budget/dedupe + self-healing SSE); canonical `AppError` (no leak); **data integrity + concurrency** — optimistic version CAS in repo, idempotent retry loop, terminal invariants + DB CHECK, 100-parallel + property tests (see [engineering/](engineering/data_integrity.md)). Frozen contract, no features. Remaining: observability (metrics/logs/tracing), security (rate-limit/helmet/CORS/replay), versioned migration runner (infra), final report.
 
 ## Hard rules (do not violate)
 1. Never change `OrderGateway` contract without a new build.
