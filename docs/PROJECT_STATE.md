@@ -103,8 +103,10 @@ auth+tenant logic, the Fastify server source, the pure order service.
 
 ## 7. Git
 
-**NOT committed.** 2 base commits, no remote, ~109 files uncommitted. ONE disk copy, no
-backup. Commit + push before any `--dangerously-skip-permissions` / bypass work.
+**Committed + pushed.** Builds 01–05 committed to `main` in 6 subsystem commits and
+pushed to `origin` → https://github.com/ihorfroliak/heyhomie-mobile-apps- .
+Remote `origin` set, `main` tracks `origin/main`. Backup exists. Commit/push future
+work per the same convention (subsystem-scoped, `Co-Authored-By` trailer).
 
 ## 8. Build 06 plan (production hardening — NOT started)
 
