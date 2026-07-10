@@ -24,9 +24,12 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/heyhomie
       PORT: "8090"
-      # Override in a real deploy. Must be >=16 chars; default is dev-only.
+      # Override in a real deploy. Must be >=16 chars; default is a placeholder.
       AUTH_SECRET: ${AUTH_SECRET:-dev-secret-change-me-16+}
-      AUTH_DEV_MODE: ${AUTH_DEV_MODE:-1}
+      # The image runs NODE_ENV=production, which forbids dev mode — so this MUST
+      # default to 0 or the container fail-fasts on boot (found in Build 11).
+      # For a local dev-token workflow, run outside the prod image (npm run server).
+      AUTH_DEV_MODE: ${AUTH_DEV_MODE:-0}
     ports:
       - "8090:8090"
     depends_on:

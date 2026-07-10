@@ -14,7 +14,9 @@ RUN npm install --include-workspace-root --workspace @heyhomie/server
 ENV NODE_ENV=production
 EXPOSE 8090
 
+# Use 127.0.0.1 (not localhost): the app binds IPv4 0.0.0.0, but `localhost`
+# resolves to IPv6 ::1 first on node:alpine → false "unhealthy" (found Build 11).
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD wget -qO- http://localhost:8090/health/ready || exit 1
+    CMD wget -qO- http://127.0.0.1:8090/health/ready || exit 1
 
 CMD ["npx", "tsx", "server/src/index.ts"]
