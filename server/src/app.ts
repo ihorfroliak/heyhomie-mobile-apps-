@@ -49,7 +49,9 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
     const limiter = new RateLimiter({ capacity: config.rateCapacity, refillPerSec: config.rateRefillPerSec });
     app.addHook('onRequest', async (req, reply) => {
         reply.header('x-correlation-id', req.id); // echo so clients can report it
-        metrics.activeRequests.add(1);
+        // SSE hijacks the reply → onResponse never fires for it, so don't count it
+        // in activeRequests (would leak); the sse_connections gauge tracks it instead.
+        if (!req.url.startsWith('/orders/stream')) metrics.activeRequests.add(1);
         if (req.url.startsWith('/health')) return; // never throttle probes
         if (!limiter.allow(req.ip)) throw new RateLimitedError();
     });
@@ -98,6 +100,9 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
             statusCode: ae.httpStatus,
             retryable: ae.retryable,
         }, 'request_error');
+        // If bytes were already streamed (SSE / chunked), we can't send a fresh
+        // status+body — writing headers again would throw ERR_HTTP_HEADERS_SENT.
+        if (reply.raw.headersSent) { try { reply.raw.end(); } catch { /* already closed */ } return; }
         reply.code(ae.httpStatus).send(ae.toResponse());
     });
 

@@ -41,6 +41,10 @@ export function registerRoutes(app: FastifyInstance, service: OrderService): voi
 export function registerStream(app: FastifyInstance, service: OrderService, metrics?: { sseConnections: { add: (d: number) => void } }): void {
     app.get('/orders/stream', async (req, reply) => {
         const auth = reqAuth(req);
+        // Take over the socket so Fastify won't try to serialize/error-handle this
+        // reply after we've streamed bytes (a post-headers throw would otherwise
+        // double-writeHead and crash the process — found under SSE load, Build 13).
+        reply.hijack();
         reply.raw.writeHead(200, {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
@@ -48,16 +52,28 @@ export function registerStream(app: FastifyInstance, service: OrderService, metr
         });
         metrics?.sseConnections.add(1);
         req.log.info({ correlationId: req.id, tenantId: auth.tenantId }, 'sse_connected');
+        let closed = false;
+        // Guarded write — never throw on a disconnected client.
+        const write = (chunk: string): void => {
+            if (closed || reply.raw.writableEnded) return;
+            try { reply.raw.write(chunk); } catch { /* client vanished mid-write */ }
+        };
         const send = async () => {
-            const orders = (await service.list(auth)).map(toContractOrder);
-            reply.raw.write(`data: ${JSON.stringify(orders)}\n\n`);
+            try {
+                const orders = (await service.list(auth)).map(toContractOrder);
+                write(`data: ${JSON.stringify(orders)}\n\n`);
+            } catch (e) {
+                req.log.error({ correlationId: req.id, err: e }, 'sse_send_failed');
+            }
         };
         await send(); // initial snapshot (tenant-scoped)
         const unsub = service.subscribe(() => { void send(); });
         // Heartbeat comment keeps the connection alive through proxies and lets the
         // client's watchdog detect a dead link. Cleared on close (no timer leak).
-        const heartbeat = setInterval(() => reply.raw.write(': ping\n\n'), 15_000);
+        const heartbeat = setInterval(() => write(': ping\n\n'), 15_000);
         req.raw.on('close', () => {
+            if (closed) return;
+            closed = true;
             clearInterval(heartbeat);
             unsub();
             metrics?.sseConnections.add(-1);
