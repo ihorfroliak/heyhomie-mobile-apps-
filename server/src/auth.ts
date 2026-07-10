@@ -1,22 +1,30 @@
 /**
  * Server auth — the trust boundary. Opaque bearer tokens are HMAC-signed here
- * (node:crypto) so a spoofed header without a valid signature is rejected. Auth
- * is orthogonal: it never touches order business logic, only gates the request
- * and yields the AuthContext the service enforces tenancy with.
+ * (node:crypto) so a spoofed header without a valid signature is rejected. Tokens
+ * carry iat/exp and EXPIRE (validated via the pure `validateClaims`). Auth is
+ * orthogonal: it never touches order business logic, only gates the request and
+ * yields the AuthContext the service enforces tenancy with.
  *
- * Minimal by design: no OAuth, no JWT refresh, no DB sessions (Build 05 scope).
+ * Every failure → a generic 401 (UnauthorizedError) so the reason never leaks.
+ * Minimal by design: no OAuth, no JWT lib, no DB sessions.
  */
 import crypto from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { AuthContext, Role } from '@heyhomie/api';
+import { validateClaims, UnauthorizedError, type AuthContext, type Role, type TokenClaims, type VerifyTokenOptions } from '@heyhomie/api';
 
-export function signAuthToken(auth: AuthContext, secret: string): string {
-    const body = Buffer.from(JSON.stringify(auth)).toString('base64url');
+export const DEFAULT_TTL_SEC = 900; // 15 min — bounds the replay window
+
+export function signAuthToken(auth: AuthContext, secret: string, ttlSec: number = DEFAULT_TTL_SEC): string {
+    const iat = Math.floor(Date.now() / 1000);
+    const claims: TokenClaims = { ...auth, iat, exp: iat + ttlSec };
+    const body = Buffer.from(JSON.stringify(claims)).toString('base64url');
     const sig = crypto.createHmac('sha256', secret).update(body).digest('base64url');
     return `${body}.${sig}`;
 }
 
-export function verifyAuthToken(token: string, secret: string): AuthContext | null {
+/** Verify signature (timing-safe) THEN validate claims (expiry/skew/shape). Any
+ *  failure → null (caller returns a generic 401). */
+export function verifyAuthToken(token: string, secret: string, opts?: VerifyTokenOptions): AuthContext | null {
     const dot = token.indexOf('.');
     if (dot < 0) return null;
     const body = token.slice(0, dot);
@@ -26,20 +34,19 @@ export function verifyAuthToken(token: string, secret: string): AuthContext | nu
     const b = Buffer.from(expected);
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
     try {
-        const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as Partial<AuthContext>;
-        if (typeof p.userId === 'string' && typeof p.tenantId === 'string' && (p.role === 'admin' || p.role === 'member')) {
-            return { userId: p.userId, tenantId: p.tenantId, role: p.role };
-        }
-        return null;
+        const parsed = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+        return validateClaims(parsed, opts); // throws on expiry/malformed
     } catch {
         return null;
     }
 }
 
+const isPublic = (url: string) => url.startsWith('/health') || url.startsWith('/dev/token');
+
 /** Fastify preHandler: extract + verify identity, attach `req.auth`, else 401. */
 export function authenticateRequest(secret: string, devMode: boolean) {
-    return async (req: FastifyRequest, reply: FastifyReply) => {
-        if (req.url.startsWith('/healthz') || req.url.startsWith('/dev/token')) return; // public
+    return async (req: FastifyRequest, _reply: FastifyReply) => {
+        if (isPublic(req.url)) return; // health probes + dev token are public
 
         const hdr = req.headers['authorization'];
         let token: string | undefined;
@@ -49,7 +56,7 @@ export function authenticateRequest(secret: string, devMode: boolean) {
 
         if (token) {
             const auth = verifyAuthToken(token, secret);
-            if (!auth) return reply.code(401).send({ error: 'invalid token' });
+            if (!auth) throw new UnauthorizedError('invalid or expired token');
             (req as FastifyRequest & { auth: AuthContext }).auth = auth;
             return;
         }
@@ -65,7 +72,7 @@ export function authenticateRequest(secret: string, devMode: boolean) {
                 return;
             }
         }
-        return reply.code(401).send({ error: 'unauthenticated' });
+        throw new UnauthorizedError('unauthenticated');
     };
 }
 

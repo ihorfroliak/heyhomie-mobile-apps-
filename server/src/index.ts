@@ -7,7 +7,7 @@
  * shutdown. The process never boots with invalid configuration.
  */
 import Fastify from 'fastify';
-import { makeOrderService, loadServerConfig, ConfigError, fromUnknown, type AuthContext, type Role } from '@heyhomie/api';
+import { makeOrderService, loadServerConfig, ConfigError, fromUnknown, RateLimiter, RateLimitedError, type AuthContext, type Role } from '@heyhomie/api';
 import { makePool, initSchema } from './db.js';
 import { pgOrderRepo } from './pgRepo.js';
 import { registerRoutes, registerStream } from './routes.js';
@@ -23,7 +23,21 @@ async function main() {
     await initSchema(pool);
     const service = makeOrderService(pgOrderRepo(pool));
 
-    const app = Fastify({ logger: true });
+    const app = Fastify({
+        // Redact the bearer token from request logs; cap body size (DoS guard).
+        // Residual: the SSE token rides in the query string (EventSource can't set
+        // headers) so it may appear in access logs — bounded by the 15-min TTL.
+        logger: { redact: ['req.headers.authorization', 'req.headers["x-dev-user"]', 'req.headers["x-dev-tenant"]'] },
+        bodyLimit: 64 * 1024,
+    });
+
+    // Rate limit BEFORE auth so unauthenticated floods are shed cheaply. Per-IP,
+    // in-memory (single-instance; multi-instance needs a shared store — INFRA PENDING).
+    const limiter = new RateLimiter({ capacity: 120, refillPerSec: 20 });
+    app.addHook('onRequest', async (req) => {
+        if (req.url.startsWith('/health')) return; // never throttle liveness/readiness probes
+        if (!limiter.allow(req.ip)) throw new RateLimitedError();
+    });
 
     // Every error → a canonical, client-safe response. Raw errors never leak.
     app.setErrorHandler((err, req, reply) => {

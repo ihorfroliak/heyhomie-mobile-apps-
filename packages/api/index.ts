@@ -11,7 +11,9 @@ export * from './notifyClient';
 // bookingStore is a PRIVATE implementation detail — NOT exported. UI must go
 // through the OrderGateway. Importing the store from '@heyhomie/api' will fail.
 export * from './errors'; // canonical AppError hierarchy
-export * from './auth'; // AuthContext, tenant guard (pure — no crypto)
+export * from './auth'; // AuthContext, tenant guard, token-claims validation (pure)
+export * from './orderValidation'; // boundary input validation
+export * from './rateLimiter'; // in-memory token-bucket limiter
 export * from './serverConfig'; // fail-fast env validation (server boot)
 export * from './orderContract'; // frozen types (Order, OrderGateway, Submit* ...)
 export * from './orderGateway'; // Local adapter + active `orderGateway` binding
