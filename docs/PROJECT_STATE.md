@@ -3,7 +3,8 @@
 Durable handoff. Read this first in any new session to continue development
 without re-deriving context. Reflects the repository as-is (evidence, not plans).
 
-Last updated: end of Build 05.
+Last updated: end of Build 09 (production verification). For the running build
+log and file map see [INDEX.md](INDEX.md) — it is updated every build.
 
 ---
 
@@ -66,7 +67,7 @@ UI (apps/*)  ──imports only──►  orderGateway  (packages/api/orderContr
 
 ```bash
 # tests + typecheck + app/anti-dep guard (the standard gate)
-npm run check              # 23 files · 481 assertions · typecheck 0 · 56 app files 0 problems
+npm run check              # 31 files · 618 assertions · typecheck 0 · 56 app files 0 problems
 npm test                   # auto-discovers every *.test.ts
 npm run typecheck          # tsconfig.check.json (packages/{domain,api,analytics})
 npm run check:apps         # brackets + forbidden glyphs + anti-store-import
@@ -108,18 +109,21 @@ pushed to `origin` → https://github.com/ihorfroliak/heyhomie-mobile-apps- .
 Remote `origin` set, `main` tracks `origin/main`. Backup exists. Commit/push future
 work per the same convention (subsystem-scoped, `Co-Authored-By` trailer).
 
-## 8. Build 06 plan (production hardening — NOT started)
+## 8. Production hardening (Builds 06–09 — DONE, code-level)
 
-Frozen contract, no features. Incremental + verifiable. Most needs the live server →
-much will be CODE COMPLETE / INFRA PENDING. Steps:
-Dockerfile + compose + healthchecks · env validation (fail-fast) · real versioned
-migrations (+rollback, no runtime auto-mutate) · repo reliability (tx, optimistic
-concurrency, retry, pool) · request correlation (requestId/traceId) · structured JSON
-logs · Prometheus `/metrics` · canonical error model · `/health/live` + `/health/ready` ·
-SSE reliability (heartbeat/reconnect/cleanup) · gateway resilience (retry/backoff/abort/
-timeout/offline) · security hardening (rate-limit/helmet/CORS/body-limit/token-exp/replay) ·
-production + e2e tests · deploy/rollback/backup/restore checklists · architecture +
-performance audit · final production report.
+Frozen contract, no features. Delivered and test-proven:
+Docker + compose + health probes + graceful shutdown · fail-fast config validation ·
+canonical `AppError` model (no leak) · gateway resilience (timeout/retry/backoff/
+jitter/budget/dedupe + self-healing SSE) · **optimistic concurrency (version CAS)**
++ idempotent mutations + terminal invariants + DB CHECK (100-parallel + property
+tests) · security (token exp+skew, input validation, per-IP rate limit, redaction,
+bodyLimit) · observability (Prometheus `/metrics`, correlation ids end-to-end,
+structured logs, service+gateway telemetry) · Build 09 verification (stress 500
+mutations/1000 reads, reconnect storm, listener-leak fixes, hygiene).
+Docs: [engineering/](engineering/data_integrity.md) · [security/](security/security_model.md)
+· [observability/](observability/observability.md).
+**INFRA PENDING:** deploy + live Postgres/TLS/proxy, versioned migration runner on a
+live DB, real token issuer, live e2e.
 
 ## 9. Working rules (how this repo is developed)
 

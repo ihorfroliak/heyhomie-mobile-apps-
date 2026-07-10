@@ -95,7 +95,6 @@ export const paymentStatusTone = (s: PaymentStatus): PaymentTone =>
     s === 'paid' ? 'success' : s === 'failed' ? 'danger' : s === 'awaiting_completion' || s === 'refunded' ? 'neutral' : 'warning';
 
 export const isPaid = (p: PaymentIntent): boolean => p.status === 'paid';
-export const isSettled = (p: PaymentIntent): boolean => p.status === 'paid' || p.status === 'refunded';
 
 /** Stripe-hosted payment link for pay-later. Backend returns the real Checkout URL. */
 export const payLaterLink = (orderId: string): string => `https://pay.heyhomie.pl/o/${orderId}`;
