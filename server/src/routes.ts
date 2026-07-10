@@ -38,7 +38,7 @@ export function registerRoutes(app: FastifyInstance, service: OrderService): voi
  * its own tenant, so no data crosses the boundary.
  * NOTE: single-instance. Horizontal scale needs Postgres LISTEN/NOTIFY.
  */
-export function registerStream(app: FastifyInstance, service: OrderService): void {
+export function registerStream(app: FastifyInstance, service: OrderService, metrics?: { sseConnections: { add: (d: number) => void } }): void {
     app.get('/orders/stream', async (req, reply) => {
         const auth = reqAuth(req);
         reply.raw.writeHead(200, {
@@ -46,6 +46,8 @@ export function registerStream(app: FastifyInstance, service: OrderService): voi
             'Cache-Control': 'no-cache',
             Connection: 'keep-alive',
         });
+        metrics?.sseConnections.add(1);
+        req.log.info({ correlationId: req.id, tenantId: auth.tenantId }, 'sse_connected');
         const send = async () => {
             const orders = (await service.list(auth)).map(toContractOrder);
             reply.raw.write(`data: ${JSON.stringify(orders)}\n\n`);
@@ -55,6 +57,11 @@ export function registerStream(app: FastifyInstance, service: OrderService): voi
         // Heartbeat comment keeps the connection alive through proxies and lets the
         // client's watchdog detect a dead link. Cleared on close (no timer leak).
         const heartbeat = setInterval(() => reply.raw.write(': ping\n\n'), 15_000);
-        req.raw.on('close', () => { clearInterval(heartbeat); unsub(); });
+        req.raw.on('close', () => {
+            clearInterval(heartbeat);
+            unsub();
+            metrics?.sseConnections.add(-1);
+            req.log.info({ correlationId: req.id, tenantId: auth.tenantId }, 'sse_disconnected');
+        });
     });
 }

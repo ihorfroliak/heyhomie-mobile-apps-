@@ -95,6 +95,8 @@ export interface HttpPortConfig {
     reconnectBaseMs?: number;
     reconnectMaxMs?: number;
     timers?: TimerHost;
+    /** Observability sink: retry attempts, timeouts, SSE reconnects. */
+    onTelemetry?: (event: 'retry' | 'timeout' | 'sse_reconnect') => void;
 }
 
 /** Maps the OrderGateway port to REST endpoints + the `/orders/stream` SSE feed,
@@ -116,21 +118,42 @@ export function httpOrderPort(config: HttpPortConfig): OrderBackendPort {
     };
     const budget = new RetryBudget(20, 5); // shared cap: no retry storms
     const dedup = dedupe();
+    const tel = config.onTelemetry ?? (() => {});
+    let corrSeq = 0;
+    // One correlationId per logical call — retries of the same call REUSE it, so
+    // server logs group all attempts of one operation under one id.
+    const newCorrelationId = () => `c-${Date.now().toString(36)}-${(++corrSeq).toString(36)}`;
 
-    const authHeaders = (): Record<string, string> => {
+    const authHeaders = (correlationId: string): Record<string, string> => {
         const t = config.getToken();
-        return { 'content-type': 'application/json', ...(t ? { authorization: `Bearer ${t}` } : {}) };
+        return {
+            'content-type': 'application/json',
+            'x-correlation-id': correlationId,
+            ...(t ? { authorization: `Bearer ${t}` } : {}),
+        };
     };
-    const rawPost = (path: string, body: unknown, signal: AbortSignal) =>
-        doFetch(`${base}${path}`, { method: 'POST', headers: authHeaders(), body: body !== undefined ? JSON.stringify(body) : undefined, signal }).then(res => {
+    const rawPost = (path: string, body: unknown, signal: AbortSignal, correlationId: string) =>
+        doFetch(`${base}${path}`, { method: 'POST', headers: authHeaders(correlationId), body: body !== undefined ? JSON.stringify(body) : undefined, signal }).then(res => {
             if (!res.ok) throw new HttpStatusError(res.status, `POST ${path} → ${res.status}`);
             return res;
         });
 
-    const once = (path: string, body?: unknown) => withTimeout(signal => rawPost(path, body, signal), timeoutMs);
+    const once = async (path: string, body?: unknown, correlationId: string = newCorrelationId()) => {
+        try {
+            return await withTimeout(signal => rawPost(path, body, signal, correlationId), timeoutMs);
+        } catch (e) {
+            if (e instanceof Error && e.message.includes('timeout')) tel('timeout');
+            throw e;
+        }
+    };
     /** Idempotent mutation: retried within budget + deduped by (op,id) against double-fire. */
-    const idempotent = (path: string, key: string, body?: unknown) =>
-        dedup(key, () => withRetry(() => once(path, body), { ...rOpts, budget }));
+    const idempotent = (path: string, key: string, body?: unknown) => {
+        const correlationId = newCorrelationId();
+        return dedup(key, () => withRetry((attempt) => {
+            if (attempt > 0) tel('retry');
+            return once(path, body, correlationId);
+        }, { ...rOpts, budget }));
+    };
 
     return {
         connect(onSnapshot) {
@@ -150,6 +173,7 @@ export function httpOrderPort(config: HttpPortConfig): OrderBackendPort {
                 stopTimers();
                 try { es?.close(); } catch { /* ignore */ }
                 es = null;
+                tel('sse_reconnect');
                 const delay = backoffDelay(attempt++, { baseMs: reconnectBaseMs, maxMs: reconnectMaxMs });
                 reconnectHandle = timers.set(open, delay);
             };

@@ -41,7 +41,9 @@ export function verifyAuthToken(token: string, secret: string, opts?: VerifyToke
     }
 }
 
-const isPublic = (url: string) => url.startsWith('/health') || url.startsWith('/dev/token');
+// Public: health probes (orchestrators), /metrics (Prometheus scraper — counts
+// only, no data), dev token mint (dev-mode only route).
+const isPublic = (url: string) => url.startsWith('/health') || url.startsWith('/metrics') || url.startsWith('/dev/token');
 
 /** Fastify preHandler: extract + verify identity, attach `req.auth`, else 401. */
 export function authenticateRequest(secret: string, devMode: boolean) {

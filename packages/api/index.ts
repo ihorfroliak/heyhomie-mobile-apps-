@@ -14,6 +14,7 @@ export * from './errors'; // canonical AppError hierarchy
 export * from './auth'; // AuthContext, tenant guard, token-claims validation (pure)
 export * from './orderValidation'; // boundary input validation
 export * from './rateLimiter'; // in-memory token-bucket limiter
+export * from './metrics'; // pure Prometheus registry (Counter/Gauge/Histogram)
 export * from './serverConfig'; // fail-fast env validation (server boot)
 export * from './orderContract'; // frozen types (Order, OrderGateway, Submit* ...)
 export * from './orderGateway'; // Local adapter + active `orderGateway` binding
