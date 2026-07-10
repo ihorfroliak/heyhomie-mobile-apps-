@@ -16,6 +16,8 @@ import { makeServerMetrics, type ServerMetrics } from './metrics.js';
 export interface BuiltApp {
     app: FastifyInstance;
     metrics: ServerMetrics;
+    /** Flip readiness to 503 (SIGTERM → LB stops routing + drains, then close). */
+    beginShutdown: () => void;
 }
 
 export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => Promise<void>): BuiltApp {
@@ -32,8 +34,10 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
         // req.ip is the REAL client IP — otherwise the rate limiter would bucket
         // every client under the single proxy IP (H1). Off for direct connections.
         trustProxy: config.trustProxy,
-        // SSE connections are never idle; without this a graceful close would hang
-        // waiting for them. Verified by the live shutdown test.
+        // true = shutdown is ALWAYS bounded (never hangs on long-lived / reconnecting
+        // SSE). In-flight requests are drained at the LB via the readiness flip
+        // below (SIGTERM → /health/ready 503 → orchestrator stops routing + drains,
+        // THEN close) — the standard k8s preStop pattern (Build 14).
         forceCloseConnections: true,
         // Correlation: reuse the client's x-correlation-id (the gateway sends one
         // per logical call, stable across retries), else generate. req.id IS the
@@ -108,8 +112,11 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
 
     // Liveness: process is up. Readiness: dependencies healthy (gates traffic).
     // Both PUBLIC (auth skips /health*) and never rate limited.
+    let shuttingDown = false;
     app.get('/health/live', async () => ({ status: 'up' }));
     app.get('/health/ready', async (_req, reply) => {
+        // While draining, report NOT ready so the LB/orchestrator stops routing.
+        if (shuttingDown) return reply.code(503).send({ status: 'shutting_down' });
         try {
             await checkDb();
             return { status: 'ready', db: 'up' };
@@ -133,9 +140,17 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
         });
     }
 
+    // Graceful shutdown: SSE connections are long-lived and would block app.close()
+    // forever. Track their sockets and end them on close, so in-flight requests
+    // still drain cleanly (no forceCloseConnections → no dropped requests, Build 14).
+    const sseSockets = new Set<{ end: () => void }>();
+    app.addHook('onClose', async () => {
+        for (const raw of sseSockets) { try { raw.end(); } catch { /* already closed */ } }
+    });
+
     app.addHook('preHandler', authenticateRequest(config.authSecret, config.devMode));
     registerRoutes(app, service);
-    registerStream(app, service, metrics);
+    registerStream(app, service, metrics, sseSockets);
 
-    return { app, metrics };
+    return { app, metrics, beginShutdown: () => { shuttingDown = true; } };
 }

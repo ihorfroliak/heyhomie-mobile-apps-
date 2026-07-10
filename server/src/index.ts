@@ -20,7 +20,8 @@ async function main() {
     await initSchema(pool);
 
     // 3. The application (routes, auth, metrics, hooks) — repo-injected.
-    const { app } = buildApp(config, pgOrderRepo(pool), async () => { await pool.query('SELECT 1'); });
+    const { app, beginShutdown } = buildApp(config, pgOrderRepo(pool), async () => { await pool.query('SELECT 1'); });
+    const DRAIN_MS = Number(process.env.SHUTDOWN_DRAIN_MS ?? 3000);
 
     await app.listen({ port: config.port, host: '0.0.0.0' });
 
@@ -40,8 +41,13 @@ async function main() {
     // Graceful shutdown — drain connections, close the pool, then exit.
     const shutdown = async (signal: string) => {
         const t0 = Date.now();
-        app.log.info({ signal }, 'shutdown_started');
+        app.log.info({ signal, drainMs: DRAIN_MS }, 'shutdown_started');
         try {
+            // 1) flip readiness → 503 so the LB/orchestrator stops routing new traffic
+            beginShutdown();
+            // 2) grace window for in-flight requests to drain at the LB before we close
+            await new Promise(r => setTimeout(r, DRAIN_MS));
+            // 3) bounded close (forceCloseConnections:true → never hangs on SSE) + pool
             await app.close();
             await pool.end();
             app.log.info({ shutdownDuration_ms: Date.now() - t0 }, 'shutdown_complete');

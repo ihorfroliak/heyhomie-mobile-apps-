@@ -25,4 +25,7 @@ EXPOSE 8090
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD wget -qO- http://127.0.0.1:8090/health/ready || exit 1
 
-CMD ["npx", "tsx", "server/src/index.ts"]
+# Run node AS PID 1 (tsx as a loader via --import) — NOT `npx tsx`, whose npx
+# wrapper is PID 1 and exits early on SIGTERM, killing the graceful drain mid-way
+# (exit 137, found Build 14). node PID 1 receives SIGTERM and controls its exit.
+CMD ["node", "--import", "tsx", "server/src/index.ts"]

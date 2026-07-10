@@ -38,7 +38,7 @@ export function registerRoutes(app: FastifyInstance, service: OrderService): voi
  * its own tenant, so no data crosses the boundary.
  * NOTE: single-instance. Horizontal scale needs Postgres LISTEN/NOTIFY.
  */
-export function registerStream(app: FastifyInstance, service: OrderService, metrics?: { sseConnections: { add: (d: number) => void } }): void {
+export function registerStream(app: FastifyInstance, service: OrderService, metrics?: { sseConnections: { add: (d: number) => void } }, sseSockets?: Set<{ end: () => void }>): void {
     app.get('/orders/stream', async (req, reply) => {
         const auth = reqAuth(req);
         // Take over the socket so Fastify won't try to serialize/error-handle this
@@ -50,6 +50,9 @@ export function registerStream(app: FastifyInstance, service: OrderService, metr
             'Cache-Control': 'no-cache',
             Connection: 'keep-alive',
         });
+        // Registered so graceful shutdown can end long-lived SSE sockets (they'd
+        // otherwise block app.close() forever — Build 14).
+        sseSockets?.add(reply.raw);
         metrics?.sseConnections.add(1);
         req.log.info({ correlationId: req.id, tenantId: auth.tenantId }, 'sse_connected');
         let closed = false;
@@ -76,6 +79,7 @@ export function registerStream(app: FastifyInstance, service: OrderService, metr
             closed = true;
             clearInterval(heartbeat);
             unsub();
+            sseSockets?.delete(reply.raw);
             metrics?.sseConnections.add(-1);
             req.log.info({ correlationId: req.id, tenantId: auth.tenantId }, 'sse_disconnected');
         });

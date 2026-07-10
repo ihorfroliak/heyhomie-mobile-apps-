@@ -18,6 +18,7 @@
     "check:apps": "node tools/check-apps.mjs",
     "test:live": "npx tsx server/test/live.test.ts",
     "test:pg": "npx tsx server/test/pg.test.ts",
+    "test:ops": "npx tsx server/test/ops.ts",
     "check": "npm test && npm run typecheck && npm run check:apps"
   },
   "engines": {
