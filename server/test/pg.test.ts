@@ -9,6 +9,7 @@
  */
 import { makeOrderService, ConflictError, loadServerConfig, type AuthContext, type ServerOrder } from '@heyhomie/api';
 import { makePool, initSchema } from '../src/db.js';
+import { runMigrations } from '../src/migrate.js';
 import { pgOrderRepo } from '../src/pgRepo.js';
 import { buildApp } from '../src/app.js';
 import { signAuthToken } from '../src/auth.js';
@@ -25,20 +26,28 @@ const authB: AuthContext = { userId: 'b', tenantId: 'T2', role: 'member' };
 async function main() {
     const pool = makePool(PG_URL);
     await pool.query('DROP TABLE IF EXISTS orders'); // clean slate (test db only)
+    await pool.query('DROP TABLE IF EXISTS schema_migrations');
     await pool.query('DROP TYPE IF EXISTS order_status');
 
-    // ── PHASE 3: migration on empty DB + idempotent re-run ──
+    // ── H4/PHASE 3: versioned migrations — TWO concurrent starts on an empty DB.
+    // The advisory lock must let exactly one instance apply all migrations while
+    // the other waits and then applies nothing.
     const tMig = Date.now();
-    await initSchema(pool);
-    console.log(`  [perf] migration on empty db: ${Date.now() - tMig}ms`);
-    await initSchema(pool); // second run must be a no-op, not an error
-    await initSchema(pool);
-    ok('migrations idempotent (3 runs, no error)', true);
+    const [runX, runY] = await Promise.all([runMigrations(pool), runMigrations(pool)]);
+    console.log(`  [perf] concurrent migration on empty db: ${Date.now() - tMig}ms`);
+    eq('exactly 4 migrations applied across both starts', runX.length + runY.length, 4);
+    ok('one instance migrated, the other waited (0)', (runX.length === 4 && runY.length === 0) || (runY.length === 4 && runX.length === 0));
+    const hist = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
+    eq('migration history records each version once', hist.rows.map((r: { version: number }) => Number(r.version)), [1, 2, 3, 4]);
+    eq('re-running migrations is a no-op (idempotent)', (await runMigrations(pool)).length, 0);
+    await initSchema(pool); // the callers' entrypoint — also idempotent
     const cols = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'orders'`);
-    const names = cols.rows.map((r: { column_name: string }) => r.column_name).sort();
-    eq('schema columns correct', names, ['created_at', 'id', 'payload', 'status', 'tenant_id', 'updated_at', 'version']);
+    eq('schema columns correct', cols.rows.map((r: { column_name: string }) => r.column_name).sort(), ['created_at', 'id', 'payload', 'status', 'tenant_id', 'updated_at', 'version']);
     const idx = await pool.query(`SELECT indexname FROM pg_indexes WHERE tablename = 'orders'`);
-    ok('tenant index exists', idx.rows.some((r: { indexname: string }) => r.indexname === 'orders_tenant_idx'));
+    ok('tenant + tenant/created indexes exist', idx.rows.some((r: { indexname: string }) => r.indexname === 'orders_tenant_idx') && idx.rows.some((r: { indexname: string }) => r.indexname === 'orders_tenant_created_idx'));
+
+    // ── H2: pool statement_timeout actually applied on our connections ──
+    eq('pool enforces statement_timeout=10s', (await pool.query(`SELECT current_setting('statement_timeout') AS t`)).rows[0].t, '10s');
 
     const repo = pgOrderRepo(pool);
     const svc = makeOrderService(repo);
@@ -147,6 +156,25 @@ async function main() {
         ok('/metrics live over pg (mutations + requests)', metricsText.includes('order_mutations_total{') && metricsText.includes('http_requests_total{'));
         await app.close();
         await appPool.end();
+    }
+
+    // ── H1: trustProxy → rate limiter keys on the REAL client IP (X-Forwarded-For) ──
+    {
+        const cfg = loadServerConfig({ DATABASE_URL: PG_URL, AUTH_SECRET: 'h1-rate-secret-16chars', PORT: '8094', TRUST_PROXY: '1', RATE_CAPACITY: '2', RATE_REFILL: '1' });
+        const lp = makePool(PG_URL);
+        const { app } = buildApp(cfg, pgOrderRepo(lp), async () => { await lp.query('SELECT 1'); });
+        await app.listen({ port: 0, host: '127.0.0.1' });
+        const base = `http://127.0.0.1:${(app.server.address() as { port: number }).port}`;
+        // Same client IP, capacity 2 → 3rd request throttled (limiter runs before auth → 429 not 401).
+        const sameIp = [];
+        for (let i = 0; i < 4; i++) sameIp.push((await fetch(`${base}/orders`, { headers: { 'x-forwarded-for': '203.0.113.7' } })).status);
+        ok('same forwarded IP is rate-limited (429 appears)', sameIp.includes(429));
+        // Distinct forwarded IPs → distinct buckets → none throttled (all reach auth → 401).
+        const distinct = [];
+        for (let i = 0; i < 4; i++) distinct.push((await fetch(`${base}/orders`, { headers: { 'x-forwarded-for': `198.51.100.${i}` } })).status);
+        ok('distinct forwarded IPs get separate buckets (no 429)', !distinct.includes(429) && distinct.every(s => s === 401));
+        await app.close();
+        await lp.end();
     }
 
     await pool.end();

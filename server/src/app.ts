@@ -28,6 +28,10 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
         // headers) so it may appear in access logs — bounded by the 15-min TTL.
         logger: { redact: ['req.headers.authorization', 'req.headers["x-dev-user"]', 'req.headers["x-dev-tenant"]'] },
         bodyLimit: 64 * 1024,
+        // Behind a reverse proxy / LB (required for TLS), trust X-Forwarded-* so
+        // req.ip is the REAL client IP — otherwise the rate limiter would bucket
+        // every client under the single proxy IP (H1). Off for direct connections.
+        trustProxy: config.trustProxy,
         // SSE connections are never idle; without this a graceful close would hang
         // waiting for them. Verified by the live shutdown test.
         forceCloseConnections: true,
@@ -42,7 +46,7 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
 
     // Rate limit BEFORE auth so unauthenticated floods are shed cheaply. Per-IP,
     // in-memory (single-instance; multi-instance needs a shared store — INFRA PENDING).
-    const limiter = new RateLimiter({ capacity: 120, refillPerSec: 20 });
+    const limiter = new RateLimiter({ capacity: config.rateCapacity, refillPerSec: config.rateRefillPerSec });
     app.addHook('onRequest', async (req, reply) => {
         reply.header('x-correlation-id', req.id); // echo so clients can report it
         metrics.activeRequests.add(1);

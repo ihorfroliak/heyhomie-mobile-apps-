@@ -9,6 +9,11 @@ export interface ServerConfig {
     authSecret: string;
     devMode: boolean;
     production: boolean;
+    /** Trust X-Forwarded-* (real client IP behind a reverse proxy / LB). */
+    trustProxy: boolean;
+    /** Per-IP rate-limit token bucket (configurable so it's testable + tunable). */
+    rateCapacity: number;
+    rateRefillPerSec: number;
 }
 
 export class ConfigError extends Error {
@@ -41,6 +46,13 @@ export function loadServerConfig(env: Record<string, string | undefined>): Serve
     const devMode = env.AUTH_DEV_MODE === '1';
     if (production && devMode) issues.push('AUTH_DEV_MODE must be disabled in production');
 
+    const trustProxy = env.TRUST_PROXY === '1';
+
+    const rateCapacity = env.RATE_CAPACITY ? Number(env.RATE_CAPACITY) : 120;
+    if (!Number.isInteger(rateCapacity) || rateCapacity < 1) issues.push(`RATE_CAPACITY must be a positive integer (got "${env.RATE_CAPACITY}")`);
+    const rateRefillPerSec = env.RATE_REFILL ? Number(env.RATE_REFILL) : 20;
+    if (!(rateRefillPerSec > 0)) issues.push(`RATE_REFILL must be a positive number (got "${env.RATE_REFILL}")`);
+
     if (issues.length) throw new ConfigError(issues);
-    return { databaseUrl: databaseUrl as string, port, authSecret: authSecret as string, devMode, production };
+    return { databaseUrl: databaseUrl as string, port, authSecret: authSecret as string, devMode, production, trustProxy, rateCapacity, rateRefillPerSec };
 }

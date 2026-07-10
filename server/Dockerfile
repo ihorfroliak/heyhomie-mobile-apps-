@@ -3,13 +3,19 @@
 FROM node:20-alpine
 WORKDIR /app
 
-# Manifests + workspace sources (tsx runtime — no compile step).
-COPY package.json ./
+# Manifests + lockfile first (better layer caching), then workspace sources.
+COPY package.json package-lock.json ./
 COPY packages ./packages
 COPY server ./server
 
-# Install the server workspace + its linked deps (@heyhomie/api, /domain, fastify, pg, tsx).
-RUN npm install --include-workspace-root --workspace @heyhomie/server
+# H5 — reproducible install from the lockfile (npm ci), scoped to the server
+# workspace + its linked deps (@heyhomie/api, /domain, fastify, pg, tsx).
+RUN npm ci --include-workspace-root --workspace @heyhomie/server
+
+# H3 — run as the unprivileged built-in `node` user. Own /app so tsx's cache is
+# writable; the process then has no root privileges at runtime.
+RUN chown -R node:node /app
+USER node
 
 ENV NODE_ENV=production
 EXPOSE 8090
