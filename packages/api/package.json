@@ -6,5 +6,6 @@
   "types": "index.ts",
   "dependencies": {
     "@heyhomie/domain": "*"
-  }
+  },
+  "type": "module"
 }

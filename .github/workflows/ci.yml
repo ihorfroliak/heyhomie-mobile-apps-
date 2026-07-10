@@ -19,3 +19,7 @@ jobs:
         run: npm run typecheck
       - name: App-screen sanity (brackets + design glyphs)
         run: npm run check:apps
+      - name: Install server workspace (fastify/pg/tsx)
+        run: npm install --workspace @heyhomie/server --no-audit --no-fund
+      - name: Live HTTP integration (real Fastify, memory repo)
+        run: npm run test:live

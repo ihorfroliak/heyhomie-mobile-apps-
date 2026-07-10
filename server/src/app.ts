@@ -1,0 +1,132 @@
+/**
+ * buildApp — the entire HTTP application, repo-injected. `index.ts` boots it
+ * with the Postgres repo; the live integration test boots the SAME app over the
+ * memory repo on a real socket. One construction path → what we test is what we
+ * deploy.
+ */
+import Fastify, { type FastifyInstance } from 'fastify';
+import {
+    makeOrderService, fromUnknown, AppError, RateLimiter, RateLimitedError,
+    type AuthContext, type Role, type OrderRepo, type ServerConfig,
+} from '@heyhomie/api';
+import { registerRoutes, registerStream } from './routes.js';
+import { authenticateRequest, signAuthToken } from './auth.js';
+import { makeServerMetrics, type ServerMetrics } from './metrics.js';
+
+export interface BuiltApp {
+    app: FastifyInstance;
+    metrics: ServerMetrics;
+}
+
+export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => Promise<void>): BuiltApp {
+    const metrics = makeServerMetrics();
+    const service = makeOrderService(repo, metrics.serviceTelemetry);
+
+    const app = Fastify({
+        // Redact the bearer token from request logs; cap body size (DoS guard).
+        // Residual: the SSE token rides in the query string (EventSource can't set
+        // headers) so it may appear in access logs — bounded by the 15-min TTL.
+        logger: { redact: ['req.headers.authorization', 'req.headers["x-dev-user"]', 'req.headers["x-dev-tenant"]'] },
+        bodyLimit: 64 * 1024,
+        // SSE connections are never idle; without this a graceful close would hang
+        // waiting for them. Verified by the live shutdown test.
+        forceCloseConnections: true,
+        // Correlation: reuse the client's x-correlation-id (the gateway sends one
+        // per logical call, stable across retries), else generate. req.id IS the
+        // correlation id — it flows through logs, errors and responses.
+        genReqId: (req) => {
+            const cid = req.headers['x-correlation-id'];
+            return typeof cid === 'string' && cid.length > 0 && cid.length <= 128 ? cid : `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        },
+    });
+
+    // Rate limit BEFORE auth so unauthenticated floods are shed cheaply. Per-IP,
+    // in-memory (single-instance; multi-instance needs a shared store — INFRA PENDING).
+    const limiter = new RateLimiter({ capacity: 120, refillPerSec: 20 });
+    app.addHook('onRequest', async (req, reply) => {
+        reply.header('x-correlation-id', req.id); // echo so clients can report it
+        metrics.activeRequests.add(1);
+        if (req.url.startsWith('/health')) return; // never throttle probes
+        if (!limiter.allow(req.ip)) throw new RateLimitedError();
+    });
+
+    // Structured completion log + request metrics.
+    app.addHook('onResponse', async (req, reply) => {
+        metrics.activeRequests.add(-1);
+        const route = req.routeOptions?.url ?? req.url.split('?')[0];
+        metrics.httpRequests.inc({ method: req.method, route, status: String(reply.statusCode) });
+        metrics.httpDuration.observe(reply.elapsedTime / 1000, { method: req.method, route });
+        const tenantId = (req as typeof req & { auth?: AuthContext }).auth?.tenantId;
+        req.log.info({
+            correlationId: req.id,
+            tenantId,
+            route,
+            method: req.method,
+            statusCode: reply.statusCode,
+            duration_ms: Math.round(reply.elapsedTime),
+        }, 'request_completed');
+    });
+
+    // Every error → a canonical, client-safe response + error telemetry.
+    // Transport-level client errors (Fastify 413 body-too-large, 400 malformed
+    // JSON, …) carry a 4xx statusCode but are NOT AppErrors — without this
+    // mapping they'd be wrapped as 500 INTERNAL_ERROR, poisoning 5xx alerting
+    // and lying to clients about retryability. (Found by the live HTTP test.)
+    const toCanonical = (err: unknown): AppError => {
+        if (err instanceof AppError) return err;
+        const status = (err as { statusCode?: unknown }).statusCode;
+        if (typeof status === 'number' && status >= 400 && status < 500) {
+            return new AppError('TRANSPORT_CLIENT_ERROR', 'invalid_request', status, false, true, (err as Error).message, err);
+        }
+        return fromUnknown(err);
+    };
+    app.setErrorHandler((err, req, reply) => {
+        const tenantId = (req as typeof req & { auth?: AuthContext }).auth?.tenantId;
+        const ae = toCanonical(err).withContext(req.id, tenantId);
+        metrics.errors.inc({ code: ae.internalCode, status: String(ae.httpStatus), retryable: String(ae.retryable) });
+        if (ae.httpStatus === 401) metrics.authFailures.inc();
+        if (ae.internalCode === 'FORBIDDEN_TENANT_ACCESS') metrics.tenantForbidden.inc();
+        req.log.error({
+            err,
+            correlationId: req.id,
+            tenantId,
+            errorCode: ae.internalCode,
+            statusCode: ae.httpStatus,
+            retryable: ae.retryable,
+        }, 'request_error');
+        reply.code(ae.httpStatus).send(ae.toResponse());
+    });
+
+    // Liveness: process is up. Readiness: dependencies healthy (gates traffic).
+    // Both PUBLIC (auth skips /health*) and never rate limited.
+    app.get('/health/live', async () => ({ status: 'up' }));
+    app.get('/health/ready', async (_req, reply) => {
+        try {
+            await checkDb();
+            return { status: 'ready', db: 'up' };
+        } catch {
+            return reply.code(503).send({ status: 'not_ready', db: 'down' });
+        }
+    });
+    app.get('/healthz', async () => ({ ok: true })); // back-compat
+
+    // Prometheus scrape endpoint — counts + latencies only (no ids/PII/secrets).
+    app.get('/metrics', async (_req, reply) => reply.type('text/plain; version=0.0.4').send(metrics.registry.render()));
+
+    if (config.devMode) {
+        app.get<{ Querystring: { tenant?: string; user?: string; role?: string } }>('/dev/token', async (req) => {
+            const auth: AuthContext = {
+                tenantId: req.query.tenant ?? 'default',
+                userId: req.query.user ?? 'dev',
+                role: (req.query.role === 'admin' ? 'admin' : 'member') as Role,
+            };
+            return { token: signAuthToken(auth, config.authSecret), auth };
+        });
+    }
+
+    app.addHook('preHandler', authenticateRequest(config.authSecret, config.devMode));
+    registerRoutes(app, service);
+    registerStream(app, service, metrics);
+
+    return { app, metrics };
+}
