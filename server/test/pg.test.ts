@@ -1,0 +1,158 @@
+/**
+ * Build 11 — PostgreSQL proof. Runs the REAL pgOrderRepo + orderService against
+ * a live Postgres and asserts the SAME behaviour the memory repo guarantees:
+ * tenant scoping, version CAS, exactly-once under 100-parallel, terminal
+ * invariants, DB CHECK constraint, migration idempotency.
+ *
+ * Requires: postgres on PG_URL (default postgres://postgres:postgres@localhost:5434/heyhomie)
+ * Run: npx tsx server/test/pg.test.ts
+ */
+import { makeOrderService, ConflictError, loadServerConfig, type AuthContext, type ServerOrder } from '@heyhomie/api';
+import { makePool, initSchema } from '../src/db.js';
+import { pgOrderRepo } from '../src/pgRepo.js';
+import { buildApp } from '../src/app.js';
+import { signAuthToken } from '../src/auth.js';
+
+let passed = 0;
+const fail: string[] = [];
+const ok = (n: string, c: boolean) => (c ? passed++ : fail.push(n));
+const eq = (n: string, got: unknown, exp: unknown) => (JSON.stringify(got) === JSON.stringify(exp) ? passed++ : fail.push(`${n} (got ${JSON.stringify(got)}, expected ${JSON.stringify(exp)})`));
+
+const PG_URL = process.env.PG_URL ?? 'postgres://postgres:postgres@localhost:5434/heyhomie';
+const authA: AuthContext = { userId: 'a', tenantId: 'T1', role: 'admin' };
+const authB: AuthContext = { userId: 'b', tenantId: 'T2', role: 'member' };
+
+async function main() {
+    const pool = makePool(PG_URL);
+    await pool.query('DROP TABLE IF EXISTS orders'); // clean slate (test db only)
+    await pool.query('DROP TYPE IF EXISTS order_status');
+
+    // ── PHASE 3: migration on empty DB + idempotent re-run ──
+    const tMig = Date.now();
+    await initSchema(pool);
+    console.log(`  [perf] migration on empty db: ${Date.now() - tMig}ms`);
+    await initSchema(pool); // second run must be a no-op, not an error
+    await initSchema(pool);
+    ok('migrations idempotent (3 runs, no error)', true);
+    const cols = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'orders'`);
+    const names = cols.rows.map((r: { column_name: string }) => r.column_name).sort();
+    eq('schema columns correct', names, ['created_at', 'id', 'payload', 'status', 'tenant_id', 'updated_at', 'version']);
+    const idx = await pool.query(`SELECT indexname FROM pg_indexes WHERE tablename = 'orders'`);
+    ok('tenant index exists', idx.rows.some((r: { indexname: string }) => r.indexname === 'orders_tenant_idx'));
+
+    const repo = pgOrderRepo(pool);
+    const svc = makeOrderService(repo);
+    const create = async (auth: AuthContext) => (await svc.create({ contact: { phone: '600' }, cityId: 'k', serviceId: 's' }, auth)).draft.id;
+
+    // ── PHASE 2: CAS semantics identical to memory repo ──
+    const id1 = await create(authA);
+    const o1 = await repo.get(id1, 'T1') as ServerOrder;
+    eq('insert starts at version 1', o1.version, 1);
+    const upd = await repo.update({ ...o1, status: 'canceled' }, 1);
+    eq('CAS update bumps version', upd.version, 2);
+    let conflicted = false;
+    try { await repo.update({ ...o1, status: 'confirmed' }, 1); } catch (e) { conflicted = e instanceof ConflictError; }
+    ok('stale version → ConflictError (CAS)', conflicted);
+    let dup = false;
+    try { await repo.insert(o1); } catch { dup = true; }
+    ok('duplicate PK insert rejected', dup);
+
+    // tenant scoping in SQL
+    eq('cross-tenant get → undefined', await repo.get(id1, 'T2'), undefined);
+    let crossDenied = false;
+    try { await svc.cancel(id1, authB); } catch { crossDenied = true; }
+    ok('cross-tenant mutate → denied', crossDenied);
+    const idB = await create(authB);
+    ok('lists tenant-scoped', (await repo.list('T1')).every(o => o.tenantId === 'T1') && (await repo.list('T2')).some(o => o.id === idB));
+
+    // DB CHECK constraint: paid+canceled row rejected AT THE DATABASE
+    const paidPayload = { ...o1.payload, payment: { ...o1.payload.payment, status: 'paid' } };
+    let checkBlocked = false;
+    try {
+        await pool.query(
+            `INSERT INTO orders (id, tenant_id, version, status, created_at, updated_at, payload) VALUES ($1,$2,1,'canceled',now(),now(),$3)`,
+            ['bad-row', 'T1', JSON.stringify(paidPayload)],
+        );
+    } catch { checkBlocked = true; }
+    ok('DB CHECK rejects canceled+paid row', checkBlocked);
+
+    // ── PHASE 5: high-parallel workloads on real Postgres ──
+    const dueId = await create(authA);
+    await svc.complete(dueId, authA, '2025-06-01T14:00:00.000Z');
+    const t100 = Date.now();
+    await Promise.all(Array.from({ length: 100 }, () => svc.settle(dueId, authA)));
+    console.log(`  [perf] 100 parallel settle on pg: ${Date.now() - t100}ms`);
+    const settled = await repo.get(dueId, 'T1') as ServerOrder;
+    eq('100 parallel settle → paid exactly once (v3)', [settled.status, settled.version], ['paid', 3]);
+
+    const cancelId = await create(authA);
+    await Promise.all(Array.from({ length: 100 }, () => svc.cancel(cancelId, authA)));
+    const canceled = await repo.get(cancelId, 'T1') as ServerOrder;
+    eq('100 parallel cancel → exactly one write (v2)', [canceled.status, canceled.version], ['canceled', 2]);
+
+    // mixed settle/cancel race → terminal XOR, never both
+    let badMix = 0;
+    for (let r = 0; r < 10; r++) {
+        const mid = await create(authA);
+        await svc.complete(mid, authA, '2025-06-01T14:00:00.000Z');
+        await Promise.all(Array.from({ length: 40 }, (_, i) => (i % 2 ? svc.cancel(mid, authA) : svc.settle(mid, authA))));
+        const o = await repo.get(mid, 'T1') as ServerOrder;
+        if (o.status === 'canceled' && o.payload.payment.status === 'paid') badMix += 1;
+        if (!['paid', 'canceled'].includes(o.status)) badMix += 1;
+    }
+    eq('mixed settle/cancel race on pg: never canceled+paid (10 rounds)', badMix, 0);
+
+    // parallel creates → all rows present, unique ids
+    const ids = await Promise.all(Array.from({ length: 50 }, () => create(authA)));
+    eq('50 parallel creates → 50 unique ids', new Set(ids).size, 50);
+
+    // ── rollback behaviour: failed CAS leaves row untouched ──
+    const before = await repo.get(id1, 'T1') as ServerOrder;
+    try { await repo.update({ ...before, status: 'confirmed' }, 999); } catch { /* expected */ }
+    const afterFail = await repo.get(id1, 'T1') as ServerOrder;
+    eq('failed CAS leaves row unchanged', [afterFail.status, afterFail.version], [before.status, before.version]);
+
+    // ── PHASE 4: durability across a process "crash" — a fresh connection sees committed data ──
+    {
+        const p2 = makePool(PG_URL);
+        const r2 = pgOrderRepo(p2);
+        const survived = await r2.get(dueId, 'T1');
+        eq('paid order survives a fresh connection (durable)', survived?.status, 'paid');
+        ok('no orphan/duplicate rows after concurrency', (await r2.list('T1')).filter(o => o.id === dueId).length === 1);
+        await p2.end();
+    }
+
+    // ── PHASE 6: full HTTP contract over REAL Postgres (repo swapped, HTTP/SSE layer unchanged) ──
+    {
+        const AUTH_SECRET = 'pg-http-secret-16chars-xx';
+        const config = loadServerConfig({ DATABASE_URL: PG_URL, AUTH_SECRET, PORT: '8093', AUTH_DEV_MODE: '1' });
+        const appPool = makePool(PG_URL);
+        const { app } = buildApp(config, pgOrderRepo(appPool), async () => { await appPool.query('SELECT 1'); });
+        await app.listen({ port: 0, host: '127.0.0.1' });
+        const base = `http://127.0.0.1:${(app.server.address() as { port: number }).port}`;
+        const tokA = signAuthToken({ userId: 'a', tenantId: 'H1', role: 'admin' }, AUTH_SECRET);
+        const tokB = signAuthToken({ userId: 'b', tenantId: 'H2', role: 'member' }, AUTH_SECRET);
+        const hA = { authorization: `Bearer ${tokA}`, 'content-type': 'application/json' };
+
+        eq('ready probe sees real pg (200)', (await fetch(`${base}/health/ready`)).status, 200);
+        eq('no token → 401 canonical', ((await (await fetch(`${base}/orders`)).json()) as { code: string }).code, 'UNAUTHENTICATED');
+        const created = (await (await fetch(`${base}/orders`, { method: 'POST', headers: hA, body: JSON.stringify({ contact: { phone: '600100200' }, cityId: 'krakow', serviceId: 'standard_cleaning' }) })).json()) as { draft: { id: string } };
+        ok('HTTP create over pg returns an order', !!created.draft.id);
+        const listA = (await (await fetch(`${base}/orders`, { headers: hA })).json()) as { id: string }[];
+        ok('HTTP list over pg is tenant-scoped (H1 sees own)', listA.some(o => o.id === created.draft.id));
+        eq('tenant H2 sees nothing over pg', ((await (await fetch(`${base}/orders`, { headers: { authorization: `Bearer ${tokB}` } })).json()) as unknown[]).length, 0);
+        const nf = await fetch(`${base}/orders/nope`, { headers: hA });
+        eq('missing → 404 canonical over pg', [nf.status, ((await nf.json()) as { code: string }).code], [404, 'NOT_FOUND']);
+        const metricsText = await (await fetch(`${base}/metrics`)).text();
+        ok('/metrics live over pg (mutations + requests)', metricsText.includes('order_mutations_total{') && metricsText.includes('http_requests_total{'));
+        await app.close();
+        await appPool.end();
+    }
+
+    await pool.end();
+    console.log(`\n${passed} passed, ${fail.length} failed`);
+    if (fail.length) { fail.forEach(f => console.log('  FAIL: ' + f)); process.exit(1); }
+    console.log('All PostgreSQL tests passed.');
+}
+
+main().catch(e => { console.error(e); process.exit(1); });

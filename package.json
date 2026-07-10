@@ -17,6 +17,7 @@
     "typecheck": "npx -y -p typescript@5.6.3 tsc --noEmit -p tsconfig.check.json",
     "check:apps": "node tools/check-apps.mjs",
     "test:live": "npx tsx server/test/live.test.ts",
+    "test:pg": "npx tsx server/test/pg.test.ts",
     "check": "npm test && npm run typecheck && npm run check:apps"
   },
   "engines": {
