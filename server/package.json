@@ -9,7 +9,6 @@
     "start": "tsx src/index.ts"
   },
   "dependencies": {
-    "@heyhomie/domain": "*",
     "@heyhomie/api": "*",
     "fastify": "^4.28.0",
     "pg": "^8.12.0"
