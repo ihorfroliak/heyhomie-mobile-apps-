@@ -41,7 +41,14 @@ export class RateLimiter {
     private evictIdle(t: number): void {
         if (this.buckets.size < 1024) return; // only sweep when it grows
         for (const [k, b] of this.buckets) {
-            if (b.tokens >= this.opts.capacity && t - b.last > this.idleEvictMs) this.buckets.delete(k);
+            // Evict purely on idleness. Do NOT require tokens >= capacity: refill
+            // only happens inside allow() for that key, so an abandoned DRAINED
+            // bucket would stay < capacity forever and never be evicted → unbounded
+            // Map growth under rotating-IP traffic (Build 15). Idle-only eviction is
+            // semantically identical whenever idleEvictMs × refillPerSec ≥ capacity
+            // (defaults: 60s × 20/s = 1200 ≥ 120 — an idle bucket would have
+            // refilled to full anyway before eviction).
+            if (t - b.last > this.idleEvictMs) this.buckets.delete(k);
         }
     }
 

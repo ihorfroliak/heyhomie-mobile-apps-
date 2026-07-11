@@ -133,10 +133,19 @@ async function main() {
     ok('unreachable host aborts within timeout', aborted);
 
     // metrics reflect real traffic
+    // D-A (Build 15): unmatched paths must NOT mint per-URL label series (cardinality DoS)
+    await fetch(`${base}/zz-cardinality-probe-1`, { headers: authHdr });
+    await fetch(`${base}/zz-cardinality-probe-2`, { headers: authHdr });
+    // D-B (Build 15): 401 on the stream path fires onResponse without an increment —
+    // the gauge must not drift negative.
+    await fetch(`${base}/orders/stream`); // no token → 401, not hijacked
     const metricsText = await (await fetch(`${base}/metrics`)).text();
     ok('/metrics public + has request series', metricsText.includes('http_requests_total{'));
     ok('metrics count mutations', metricsText.includes('order_mutations_total{'));
     ok('metrics saw 401s', metricsText.includes('auth_failures_total') && /auth_failures_total (\d+)/.test(metricsText));
+    ok('unmatched routes share one label (no cardinality explosion)', !metricsText.includes('zz-cardinality-probe') && metricsText.includes('route="unmatched"'));
+    const activeGauge = Number(metricsText.match(/^active_requests (-?\d+)/m)?.[1]);
+    ok('active_requests gauge never negative', Number.isFinite(activeGauge) && activeGauge >= 0);
 
     // 404 canonical over HTTP
     const nf = await fetch(`${base}/orders/does-not-exist`, { headers: authHdr });

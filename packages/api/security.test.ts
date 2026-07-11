@@ -52,6 +52,20 @@ ok('unknown fields dropped (not reflected)', !('evil' in validateSubmitOrderInpu
     ok('refill respects capacity', !rl.allow('ip1') === false ? true : true); // sanity (already consumed)
 }
 
+// ── rate limiter memory: DRAINED-then-abandoned buckets must be evicted (Build 15) ──
+{
+    let clock = 0;
+    const rl = new RateLimiter({ capacity: 1, refillPerSec: 1, now: () => clock, idleEvictMs: 1000 });
+    // 1500 rotating IPs each drain their bucket (tokens → 0) and never return.
+    for (let i = 0; i < 1500; i++) { rl.allow(`ip-${i}`); rl.allow(`ip-${i}`); }
+    ok('map grew past sweep threshold', rl.size() >= 1024);
+    clock = 5000; // all idle > idleEvictMs
+    rl.allow('fresh-ip'); // triggers the sweep
+    ok('drained idle buckets evicted (no unbounded growth)', rl.size() < 10);
+    // eviction must not grant extra tokens beyond a full bucket:
+    ok('re-created bucket starts at capacity, not more', rl.allow('ip-1') && !rl.allow('ip-1'));
+}
+
 console.log(`\n${passed} passed, ${fail.length} failed`);
 if (fail.length) { fail.forEach(f => console.log('  FAIL: ' + f)); process.exit(1); }
 console.log('All security tests passed.');

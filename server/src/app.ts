@@ -55,15 +55,24 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
         reply.header('x-correlation-id', req.id); // echo so clients can report it
         // SSE hijacks the reply → onResponse never fires for it, so don't count it
         // in activeRequests (would leak); the sse_connections gauge tracks it instead.
-        if (!req.url.startsWith('/orders/stream')) metrics.activeRequests.add(1);
+        // Stamp what we incremented and decrement ONLY stamped requests — a 401/404
+        // on the stream path DOES reach onResponse (not hijacked) and an
+        // unconditional decrement would drift the gauge negative (Build 15).
+        if (!req.url.startsWith('/orders/stream')) {
+            metrics.activeRequests.add(1);
+            (req as typeof req & { counted?: boolean }).counted = true;
+        }
         if (req.url.startsWith('/health')) return; // never throttle probes
         if (!limiter.allow(req.ip)) throw new RateLimitedError();
     });
 
     // Structured completion log + request metrics.
     app.addHook('onResponse', async (req, reply) => {
-        metrics.activeRequests.add(-1);
-        const route = req.routeOptions?.url ?? req.url.split('?')[0];
+        if ((req as typeof req & { counted?: boolean }).counted) metrics.activeRequests.add(-1);
+        // Label cardinality guard: unmatched (404) requests have no routeOptions.url;
+        // using the raw URL would let any scanner mint unbounded Prometheus series
+        // (memory DoS — Build 15). All unmatched traffic shares one label.
+        const route = req.routeOptions?.url ?? 'unmatched';
         metrics.httpRequests.inc({ method: req.method, route, status: String(reply.statusCode) });
         metrics.httpDuration.observe(reply.elapsedTime / 1000, { method: req.method, route });
         const tenantId = (req as typeof req & { auth?: AuthContext }).auth?.tenantId;
