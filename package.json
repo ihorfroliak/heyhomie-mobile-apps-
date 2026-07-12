@@ -18,11 +18,12 @@
     "typecheck:server": "npx -y -p typescript@5.6.3 tsc --noEmit -p server/tsconfig.json",
     "check:apps": "node tools/check-apps.mjs",
     "test:live": "npx tsx server/test/live.test.ts",
+    "test:e2e": "npx tsx server/test/e2e.test.ts",
     "test:pg": "npx tsx server/test/pg.test.ts",
     "test:ops": "npx tsx server/test/ops.ts",
     "test:repro": "npx tsx server/test/repro.ts",
     "check": "npm test && npm run typecheck && npm run check:apps",
-    "verify:full": "npm run check && npm run typecheck:server && npm run test:live && npm run test:pg && npm run test:ops"
+    "verify:full": "npm run check && npm run typecheck:server && npm run test:live && npm run test:e2e && npm run test:pg && npm run test:ops"
   },
   "engines": {
     "node": ">=20"

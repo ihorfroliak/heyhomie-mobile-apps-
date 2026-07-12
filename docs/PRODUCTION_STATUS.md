@@ -14,7 +14,7 @@ Latest build → [BUILD_HISTORY.md](BUILD_HISTORY.md). Gate (`npm run check`): a
 | Deployment | 85 | docker build + compose healthy + restart verified; non-root, reproducible build |
 | Infrastructure | 78 | containerized stack proven; single-instance (multi-instance needs shared state) |
 | Maintainability | 87 | clean layering, anti-dep guard, frozen contract, docs; server typecheck now clean + gated (Build 19) |
-| Testability | 93 | 667 gated assertions + pg/live/ops/load/repro harnesses; **CI now runs the strongest suites** — `test:pg`+`test:ops` on a real pg service, `test:live`, and `typecheck:server` (Build 19); one-command `verify:full` |
+| Testability | 94 | 681 gated assertions + live/e2e/pg/ops/load/repro harnesses; CI runs the strongest suites — `test:pg`+`test:ops` (real pg), `test:live`, `test:e2e` (full app journey vs real server), `typecheck:server`; one-command `verify:full` |
 | Scalability | ~50 | DB indexed/efficient; SSE full-snapshot + unpaginated list are the ceilings |
 
 ## Performance baseline (Build 13, measured on real Postgres via `test:load`)
@@ -37,7 +37,7 @@ clients ≈7MB/client, broadcast ≈6.8s at 5.5k orders (the full-snapshot scale
 Bottlenecks = unpaginated list + full-snapshot SSE (both contract-versioned work — see [OPEN_ITEMS.md](OPEN_ITEMS.md)).
 
 ## CODE COMPLETE (verified in-repo)
-Domain rules, OrderGateway contract + both adapters, authoritative `orderService` (CAS, tenant), auth+HMAC + **credential issuer** (`/auth/*`: scrypt, access+refresh, rotation/reuse-detection — Build 18), Fastify server (routes/SSE/metrics/migrations/graceful-shutdown), Docker image + compose. Proven on real Postgres 16 + real HTTP + real docker signals.
+Domain rules, OrderGateway contract + both adapters, authoritative `orderService` (CAS, tenant), auth+HMAC + **credential issuer** (`/auth/*`: scrypt, access+refresh, rotation/reuse-detection — Build 18), **client integration** (env-selected gateway + `authClient` refresh/logout/bootstrap — Build 20), Fastify server (routes/SSE/metrics/migrations/graceful-shutdown), Docker image + compose. Proven on real Postgres 16 + real HTTP + real docker signals + a real end-to-end app journey (`test:e2e`).
 
 ## INFRASTRUCTURE PENDING (external — not repo defects)
 - TLS / DNS / hosting; reverse proxy + `TRUST_PROXY=1` (real client IP); managed Postgres.

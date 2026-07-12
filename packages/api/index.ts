@@ -13,6 +13,7 @@ export * from './notifyClient';
 export * from './errors'; // canonical AppError hierarchy
 export * from './auth'; // AuthContext, tenant guard, token-claims validation (pure)
 export * from './authSession'; // pure credential/session service + AuthRepo/AuthCrypto ports (Build 18)
+export * from './authClient'; // client auth: login/refresh/logout + sync getToken/authFetch (Build 20)
 export * from './orderValidation'; // boundary input validation
 export * from './rateLimiter'; // in-memory token-bucket limiter
 export * from './metrics'; // pure Prometheus registry (Counter/Gauge/Histogram)

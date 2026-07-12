@@ -23,8 +23,8 @@ Latest build + commit: see [BUILD_HISTORY.md](BUILD_HISTORY.md) (top row) and
 1. `npm run check` — THE gate (tests + typecheck + anti-dep guard). Green = `N files · M assertions · 0 failed` (the command prints the current numbers).
 2. `npm run typecheck` (subset of #1), `npm run check:apps` (RN guard).
 3. Single test: `npx -y tsx packages/api/orderService.test.ts`.
-4. Infra tests (need Docker/Postgres): `npm run test:pg | test:ops | test:live | test:repro`.
-5. `npm run verify:full` — the WHOLE pipeline (gate + `typecheck:server` + live + pg + ops); needs Postgres on `PG_URL`. Mirrors CI.
+4. Infra tests: `npm run test:live | test:e2e` (real Fastify, memory repo, no Docker) · `test:pg | test:ops | test:repro` (need Postgres).
+5. `npm run verify:full` — the WHOLE pipeline (gate + `typecheck:server` + live + e2e + pg + ops); needs Postgres on `PG_URL`. Mirrors CI.
 6. Full stack: `docker compose up --build`.
 
 CI (Build 19) gates all of the above except repro/load/docker-build: a fast `checks`
@@ -85,9 +85,10 @@ UI (apps/*)  ──imports only──►  orderGateway  (packages/api/orderContr
   submitOrder/getOrder/listOrders/confirmOrder/completeOrder/cancelOrder/settleOrder/markPaid
   + init/subscribe/ordersSnapshot/leadsSnapshot/captureLead), `Order`, `OrderStatus`.
   **Never change without a new build.** No `tenantId`/`auth` in it (orthogonal).
-- **Active binding**: `orderGateway = localOrderGateway` (in `orderGateway.ts`). Flip to
-  `makeHttpOrderGateway(httpOrderPort({ baseUrl, getToken }))` when the server is deployed —
-  one line, no UI change. NOT flipped yet (no live server = would break apps offline).
+- **Active binding**: `orderGateway` is **env-selected** (Build 20) — `EXPO_PUBLIC_ORDERS_API_URL`
+  set → `httpOrderGateway` wired to the client `auth` facade (`getToken`/`authFetch`); unset →
+  `localOrderGateway` (offline default). No UI change either way. Apps call `configureAuth(...)`
+  + `auth.bootstrap()` before `orderGateway.init()` (`apps/{client,admin}/app/_layout.tsx`).
 - **Anti-dependency enforced**: `bookingStore` is NOT exported from the `@heyhomie/api`
   barrel (compile wall) + `tools/check-apps.mjs` fails the build if any `apps/` file names a
   store symbol. UI is store-free (grep-verified).
@@ -146,10 +147,13 @@ auth+tenant logic, the Fastify server source, the pure order service.
 **Infrastructure pending (needs external, cannot run in-session — no node_modules/Docker/pg):**
 - Deploy the server + provision Postgres + real `AUTH_SECRET`.
 - ~~A login endpoint that mints the signed token (issuer).~~ **DONE — Build 18** (`/auth/*`).
-- Flip the gateway binding + point at `EXPO_PUBLIC_ORDERS_API_URL`; wire the app login
-  screen to `/auth/*` (persist tokens via `session.setTokens`; `getToken` feeds the gateway).
-- The live HMAC/HTTP/SSE + auth path IS now exercised by `test:live` (real scrypt/HMAC) +
-  `test:pg` (real users/sessions); production deploy still unrun.
+- ~~Flip the gateway binding + point at `EXPO_PUBLIC_ORDERS_API_URL`.~~ **DONE — Build 20**
+  (env selection + `authClient` + app bootstrap). Remaining app work: a login/register
+  *screen* (the wiring exists; only UI is missing), and swap the interim AsyncStorage
+  `secureStore` for expo-secure-store before production.
+- The client↔server path (auth + HTTP + SSE + refresh + logout) IS now exercised end-to-end
+  by `test:e2e` against a real Fastify server; `test:live`/`test:pg` cover server + persistence.
+  Production DEPLOY (real host/pg/secret) still unrun.
 
 ## 7. Git
 

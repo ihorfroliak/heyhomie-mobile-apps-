@@ -11,12 +11,13 @@ Grouped by whether it's a future code change, an intentional trade-off, or exter
    content-hash `Idempotency-Key`; server dedups create by `(tenantId, key)` in a
    10-min TTL store → identical retry/double-tap returns the same order. Additive,
    no contract change. (`packages/api/idempotency.ts`, `server/src/routes.ts`.)
-3. **Auth: additional issuers + lifecycle** (foundation shipped Build 18 —
-   email+password, access+refresh, rotation/reuse-detection). Future: SMS-OTP /
-   OAuth issuers (behind the same token-mint seam), **member invites** (non-admin
-   users within a tenant — self-register only creates a tenant-owning admin today),
-   password reset, and a periodic GC for expired/revoked `auth_sessions` rows
-   (kept for reuse-detection; unbounded without a sweep).
+3. **Auth: additional issuers + lifecycle** (foundation Build 18, client wiring
+   Build 20 — `authClient` login/refresh/logout/bootstrap). Future: a login/register
+   *screen* in the apps (wiring exists, UI missing); swap the interim AsyncStorage
+   `secureStore` (`apps/{client,admin}/lib/store.ts`) for **expo-secure-store**
+   (Keychain/Keystore) before production — tokens are currently unencrypted at rest;
+   SMS-OTP / OAuth issuers; **member invites** (self-register only makes a tenant-owning
+   admin); password reset; periodic GC for expired/revoked `auth_sessions` rows.
 4. **Real payment/notification transport** — `notifyClient` is a console mock; Stripe
    + Fakturownia + email/SMS adapters are seams (`accountingClient`/`marketingClient`
    are mock/legacy). Wire when credentials exist.
@@ -32,8 +33,9 @@ Grouped by whether it's a future code change, an intentional trade-off, or exter
   correctness impact — frames are whole, ordering staleness bounded. (review C6)
 - **SSE absent from `http_requests_total`**: by design — hijacked replies bypass
   `onResponse`; `sse_connections` gauge is the correct signal. (review C9)
-- **Local adapter is the active binding** (`orderGateway = localOrderGateway`): apps
-  run offline; flip to `httpOrderGateway` only when a server is deployed.
+- **Gateway binding is env-selected** (Build 20): `EXPO_PUBLIC_ORDERS_API_URL` set →
+  `httpOrderGateway`; unset → Local (offline default). Both proven; the default stays
+  Local so apps run offline until a server is deployed.
 - **Full-snapshot SSE / single-instance rate-limit**: correct at pilot scale;
   horizontal scale needs `LISTEN/NOTIFY` + shared limiter store.
 - **`tsx` runtime in the image** (no precompile): 61ms boot — fine for MVP.

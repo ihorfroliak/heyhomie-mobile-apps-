@@ -28,6 +28,8 @@ jobs:
         run: npm run check:apps
       - name: Live HTTP integration (real Fastify + auth, memory repo)
         run: npm run test:live
+      - name: End-to-end (client auth + http gateway → real server + SSE)
+        run: npm run test:e2e
 
   # Infra job — real PostgreSQL: CAS/tenant/migrations/auth persistence + ops readiness.
   postgres:
