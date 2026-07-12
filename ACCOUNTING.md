@@ -1,3 +1,7 @@
+> ⚠️ **LEGACY DOCUMENT**
+>
+> Describes a historical (pre-Build-04) architecture and is preserved for reference only. Current project documentation begins at **[docs/INDEX.md](docs/INDEX.md)**.
+
 # Accounting & HR
 
 Phase 2 modules: worker contracts (HR) and invoicing/accounting. Invoices are

@@ -1,3 +1,7 @@
+> ⚠️ **LEGACY DOCUMENT**
+>
+> Describes a historical (pre-Build-04) architecture and is preserved for reference only. Current project documentation begins at **[docs/INDEX.md](docs/INDEX.md)**.
+
 # Marketing analytics — Google Ads + GA4
 
 The admin **Marketing** screen shows how much revenue advertising generated

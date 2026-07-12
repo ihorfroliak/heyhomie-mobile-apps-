@@ -1,7 +1,7 @@
 # Open Items
 
-Single source for "what's left". As of `a777d78`. Grouped by whether it's a
-future code change, an intentional trade-off, or external infra.
+Single source for "what's left" (latest build → [BUILD_HISTORY.md](BUILD_HISTORY.md)).
+Grouped by whether it's a future code change, an intentional trade-off, or external infra.
 
 ## Future code work (needs a new build; contract-versioned where noted)
 1. **Pagination on `GET /orders` + SSE delta frames** — the measured scale ceiling

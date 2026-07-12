@@ -1,45 +1,48 @@
 # HeyHomie apps
 
-Cross-platform app ecosystem for HeyHomie — the "uberized" home-cleaning service.
-One monorepo, three apps, shared logic. Built with **React Native + Expo** so each
-app ships to **iOS, Android and web** from a single codebase, and reuses the domain
-logic from the existing React/Next web client.
+Digital platform for a professional cleaning company — an npm-workspaces monorepo:
+**three Expo/React-Native apps** (client, worker, admin) + **pure-TS packages** +
+a **Fastify + PostgreSQL orders backend** (`server/`). Polish market (pl/en/uk).
 
-## Apps
+> **📖 Canonical documentation entry point → [docs/INDEX.md](docs/INDEX.md).**
+> It is the always-current map (file-by-file purpose, links to every doc, build
+> ledger). Start there. AI sessions: see [CLAUDE.md](CLAUDE.md), which also routes
+> to `docs/INDEX.md`.
 
-| App | Audience | Purpose |
-|-----|----------|---------|
-| `apps/client` | Customers | Book missions, manage recurring services, track, rate |
-| `apps/worker` | Homies (cleaners) | Accept missions, navigate, start/finish, photos, earnings |
-| `apps/admin` | Operators | Metrics, assignment, verification, payouts, quality |
+## Architecture in one line
+UI → **frozen `OrderGateway` contract** → Local adapter (offline) **or** Http
+adapter → authoritative **`orderService`** (optimistic-CAS, tenant-enforced) →
+repo (memory | Postgres). The contract is the only stable API surface; swapping
+backends is a one-line binding change with no UI edits. Full detail:
+[docs/INDEX.md](docs/INDEX.md) · [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md).
 
-## Shared packages
+## Apps & packages
+| Path | What |
+|---|---|
+| `apps/client` · `apps/worker` · `apps/admin` | Customer / cleaner / operator apps (Expo — iOS, Android, web) |
+| `packages/domain` | Framework-free business rules (scheduling, payments, payouts, tips, validation) |
+| `packages/api` | The OrderGateway contract + adapters + auth / rate-limit / errors / idempotency |
+| `packages/ui` · `packages/design` · `packages/analytics` | Shared components · design tokens · tracker |
+| `server/` | Fastify + Postgres backend implementing the OrderGateway HTTP contract |
 
-| Package | Contents |
-|---------|----------|
-| `packages/domain` | Framework-agnostic domain: cleaning checklist + add-ons (`cleaning.ts`), orders / services / missions + status rules (`missions.ts`). pl/en/uk, ready for new countries. |
-| `packages/design` | Design tokens — brand colors, spacing, radii, typography (`tokens.ts`). |
-| `packages/api` | API client + types + a mock layer so the apps run before the backend is wired. |
-| `packages/ui` | Shared RN components (buttons, cards, chips, status badges). |
-
-## Backend
-
-The apps talk to the existing **Go API** (homie missions: assign/begin/complete,
-schedule, payouts) and **Rails API** (orders, users, payments). During early
-development `packages/api` serves mock data so all three apps are runnable
-offline; swap the base URL to hit staging when ready.
-
-## Status
-
-Scaffolding in progress. Domain + design tokens first (no backend needed), then
-shared UI + navigation, then screens per app. See the chat thread for the full
-visual mockups (34 screens across the three apps).
-
-## Getting started (once scaffolded)
-
+## Quick start
 ```bash
-npm install
-npm run client   # expo start for the client app
-npm run worker
-npm run admin
+npm run check          # THE gate: tests + typecheck + app/anti-dep guard (run before every commit)
+npm run client | worker | admin        # run an Expo app
+npm run server                         # backend (needs Postgres) — see server/README.md
+docker compose up --build              # full stack (server + Postgres)
+
+# infra-dependent tests (need Docker/Postgres; NOT in the gate):
+npm run test:pg | test:ops | test:live | test:repro
 ```
+
+## Where to go next
+- Current status / next-session bootstrap → [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md)
+- Readiness + deploy verdict → [docs/PRODUCTION_STATUS.md](docs/PRODUCTION_STATUS.md)
+- What's left / trade-offs → [docs/OPEN_ITEMS.md](docs/OPEN_ITEMS.md)
+- Build ledger → [docs/BUILD_HISTORY.md](docs/BUILD_HISTORY.md)
+- Team / workflow → [docs/TEAM.md](docs/TEAM.md)
+
+_Legacy root docs (`ARCHITECTURE.md`, `INTEGRATION.md`, `ACCOUNTING.md`,
+`MARKETING.md`, `SECURITY.md`) predate the current backend and are kept for
+history only — each carries a LEGACY banner. The live docs are under `docs/`._

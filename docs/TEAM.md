@@ -37,8 +37,8 @@ Do NOT parallelize the pipeline stages themselves — each consumes the previous
 
 ## Merge strategy
 Single `main`, no feature branches (solo repo). The "merge gate" is `npm run check`
-(31 files · 0 failed · typecheck 0) + a clean reviewer verdict. The scribe is the
-only agent that commits/pushes. One change = one commit.
+(all files pass · 0 failed · typecheck 0) + a clean reviewer verdict. The scribe is
+the only agent that commits/pushes. One change = one commit.
 
 ## Conflict resolution
 - Engineer vs reviewer on a finding → reproduce it; a CONFIRMED correctness finding wins (must be fixed before scribe).

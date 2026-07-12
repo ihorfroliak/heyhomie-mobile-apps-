@@ -1,3 +1,7 @@
+> ⚠️ **LEGACY DOCUMENT**
+>
+> Describes a historical (pre-Build-04) architecture and is preserved for reference only. Current project documentation begins at **[docs/INDEX.md](docs/INDEX.md)**.
+
 # Security
 
 Practices baked into the HeyHomie apps. This is engineering guidance — pair it

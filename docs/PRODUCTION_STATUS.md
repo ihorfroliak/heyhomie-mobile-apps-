@@ -1,6 +1,6 @@
 # Production Status
 
-As of Build 17 (see [BUILD_HISTORY.md](BUILD_HISTORY.md) for commits). Gate: **32 files · 638 assertions · 0 failed · typecheck 0 · 56 app files 0 problems**.
+Latest build → [BUILD_HISTORY.md](BUILD_HISTORY.md). Gate (`npm run check`): all files pass · 0 failed · typecheck 0 · app/anti-dep guard 0 problems (run it for the current counts).
 
 ## Readiness (evidence-based, not aspirational)
 | Category | Score | Basis |
@@ -16,6 +16,25 @@ As of Build 17 (see [BUILD_HISTORY.md](BUILD_HISTORY.md) for commits). Gate: **3
 | Maintainability | 85 | clean layering, anti-dep guard, frozen contract, docs |
 | Testability | 91 | 628 gated assertions + pg/live/ops/load/repro harnesses |
 | Scalability | ~50 | DB indexed/efficient; SSE full-snapshot + unpaginated list are the ceilings |
+
+## Performance baseline (Build 13, measured on real Postgres via `test:load`)
+Mixed workload (70% read / 20% list / 10% create), 3000 req/stage:
+
+| concurrency | rps | p50 | p95 | p99 | max (ms) | errors |
+|---|---|---|---|---|---|---|
+| 10 | 627 | 14 | 30 | 53 | 137 | 0 |
+| 50 | 386 | 124 | 202 | 238 | 261 | 0 |
+| 100 | 285 | 343 | 451 | 471 | 501 | 0 |
+| 250 | 227 | 1066 | 1330 | 1394 | 1499 | 0 |
+| 500 | 185 | 2666 | 2942 | 2997 | 3096 | 0 |
+
+Per-op @conc 50: read **1788 rps** (p99 37ms) · create 1105 (p99 94) · settle 1058
+(p99 72) · cancel 939 (p99 113) · **list 43 (p99 1651)** — the outlier (unpaginated
+full-tenant serialization; DB itself is 2ms). EXPLAIN: all key queries **Index Scan**
+(get 0.018ms, list 1.9ms via `orders_tenant_created_idx`, CAS 0.04ms). `statement_timeout`
+fires (57014). Runtime: boot 21–61ms, graceful shutdown 1ms, image 366MB. SSE: 100
+clients ≈7MB/client, broadcast ≈6.8s at 5.5k orders (the full-snapshot scale wall).
+Bottlenecks = unpaginated list + full-snapshot SSE (both contract-versioned work — see [OPEN_ITEMS.md](OPEN_ITEMS.md)).
 
 ## CODE COMPLETE (verified in-repo)
 Domain rules, OrderGateway contract + both adapters, authoritative `orderService` (CAS, tenant), auth+HMAC, Fastify server (routes/SSE/metrics/migrations/graceful-shutdown), Docker image + compose. Proven on real Postgres 16 + real HTTP + real docker signals.

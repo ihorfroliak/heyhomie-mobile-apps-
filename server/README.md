@@ -16,6 +16,23 @@ npm --workspace @heyhomie/server run start   # or: cd server && npm run start
 # GET http://localhost:8090/healthz  → {"ok":true}
 ```
 
+### Local port conflicts
+If host ports 5432 (Postgres) or 8090 (server) are already taken (e.g. another
+project's DB), override only the **host-side** publish — do NOT change container
+networking. The server reaches the DB over the compose network name `db:5432`
+regardless of the host mapping, so remapping the host port is safe:
+
+```yaml
+# compose override (throwaway, e.g. compose.override.yml) — host ports only:
+services:
+  db:     { ports: !override ["5436:5432"] }   # DB reachable on host :5436
+  server: { ports: !override ["8095:8090"] }   # server reachable on host :8095
+```
+```bash
+docker compose -f docker-compose.yml -f compose.override.yml up -d --build
+```
+`DATABASE_URL` stays `postgres://…@db:5432/…` (internal) — unchanged.
+
 ## Endpoints (contract)
 
 | Method | Path | Op |
