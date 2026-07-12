@@ -43,11 +43,13 @@ TLS/DNS/host · managed Postgres · secrets manager · Stripe/email creds · mon
 k8s probe/preStop wiring · shared state for multi-instance. (Token **issuer** now
 in-repo — Build 18; a real `AUTH_SECRET` from the secrets manager is still external.)
 
-## Known build-gate gaps (repo hygiene)
-- **`server/` is not in the typecheck gate.** `tsc -p server/tsconfig.json` has 3
-  pre-existing errors in the `mutate` helper (`routes.ts`) — a route-generic typing
-  issue, not a runtime defect (tsx strips types; behaviour proven by `test:live`/`test:pg`).
-  Add `server/` typecheck + `test:pg`/`test:live` to CI, then fix the 3 errors.
+## Build gate / CI (closed Build 19)
+CI runs the full pipeline: `checks` job (gate + `typecheck:server` + `test:live`)
++ a `postgres` service job (`test:pg` + `test:ops`) on real pg 16, via locked
+`npm ci`. `server/` typecheck is clean and gated (the 3 `mutate` route-generic
+errors are fixed). `npm run verify:full` runs the whole pipeline locally (needs
+Postgres on `PG_URL`). Not yet gated: `test:repro` (evidence tool), `load.ts`
+(perf tool), and Docker image build (needs a runner with Docker).
 
 ## Legacy docs to reconcile (repo hygiene)
 Root `ARCHITECTURE.md` + `INTEGRATION.md` describe the pre-Build-04 external

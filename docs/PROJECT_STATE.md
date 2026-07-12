@@ -23,8 +23,13 @@ Latest build + commit: see [BUILD_HISTORY.md](BUILD_HISTORY.md) (top row) and
 1. `npm run check` — THE gate (tests + typecheck + anti-dep guard). Green = `N files · M assertions · 0 failed` (the command prints the current numbers).
 2. `npm run typecheck` (subset of #1), `npm run check:apps` (RN guard).
 3. Single test: `npx -y tsx packages/api/orderService.test.ts`.
-4. Infra tests (need Docker/Postgres, NOT in the gate): `npm run test:pg | test:ops | test:live | test:repro`.
-5. Full stack: `docker compose up --build`.
+4. Infra tests (need Docker/Postgres): `npm run test:pg | test:ops | test:live | test:repro`.
+5. `npm run verify:full` — the WHOLE pipeline (gate + `typecheck:server` + live + pg + ops); needs Postgres on `PG_URL`. Mirrors CI.
+6. Full stack: `docker compose up --build`.
+
+CI (Build 19) gates all of the above except repro/load/docker-build: a fast `checks`
+job (gate + server typecheck + live) runs in parallel with a `postgres` service job
+(pg + ops), both on locked `npm ci`.
 
 **Recurring pitfalls:**
 - Bash cwd resets each call → prepend `cd /c/Users/ihorf/Downloads/heyhomie-apps`.

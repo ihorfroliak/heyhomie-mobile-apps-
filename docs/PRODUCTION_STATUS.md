@@ -13,8 +13,8 @@ Latest build → [BUILD_HISTORY.md](BUILD_HISTORY.md). Gate (`npm run check`): a
 | Operations | 81 | k8s graceful shutdown, rolling deploy, backup/restore, health probes — all measured |
 | Deployment | 85 | docker build + compose healthy + restart verified; non-root, reproducible build |
 | Infrastructure | 78 | containerized stack proven; single-instance (multi-instance needs shared state) |
-| Maintainability | 85 | clean layering, anti-dep guard, frozen contract, docs |
-| Testability | 91 | 667 gated assertions + pg/live/ops/load/repro harnesses (auth: pure gate + real scrypt/HMAC over HTTP + pg persistence) |
+| Maintainability | 87 | clean layering, anti-dep guard, frozen contract, docs; server typecheck now clean + gated (Build 19) |
+| Testability | 93 | 667 gated assertions + pg/live/ops/load/repro harnesses; **CI now runs the strongest suites** — `test:pg`+`test:ops` on a real pg service, `test:live`, and `typecheck:server` (Build 19); one-command `verify:full` |
 | Scalability | ~50 | DB indexed/efficient; SSE full-snapshot + unpaginated list are the ceilings |
 
 ## Performance baseline (Build 13, measured on real Postgres via `test:load`)

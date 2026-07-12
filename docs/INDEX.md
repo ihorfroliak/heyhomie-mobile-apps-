@@ -18,7 +18,7 @@ tree. Trust the map; open only the 1–2 files a task needs.
 - Deep dives → [docs/engineering/](engineering/data_integrity.md) · [docs/security/](security/security_model.md) · [docs/observability/](observability/observability.md)
 - Legal (pl/en) → [legal/](../legal/) (privacy, terms, non-circumvention)
 - Backend run + auth → [server/README.md](../server/README.md)
-- Verify everything → `npm run check` (repo root)
+- Verify everything → `npm run check` (gate) · `npm run verify:full` (gate + server-typecheck + live + pg + ops; needs Postgres on `PG_URL`)
 - Remote → https://github.com/ihorfroliak/heyhomie-mobile-apps-
 
 > Doc map: no separate PROJECT.md / KNOWLEDGE_BASE.md — this INDEX is the project map; the knowledge base is [engineering/](engineering/data_integrity.md) + [security/](security/security_model.md) + [observability/](observability/observability.md). Root `ARCHITECTURE.md`/`INTEGRATION.md` are pre-Build-04 legacy (bannered).
@@ -91,7 +91,7 @@ Key ones: [catalog.ts](../packages/domain/catalog.ts) (services+details) ·
 | [tools/run-tests.mjs](../tools/run-tests.mjs) | Auto-discovers every `*.test.ts`. `npm test`. |
 | [tools/check-apps.mjs](../tools/check-apps.mjs) | Bracket/glyph check + ANTI-STORE-IMPORT guard. `npm run check:apps`. |
 | [tsconfig.check.json](../tsconfig.check.json) | Typecheck packages/{domain,api,analytics}. `npm run typecheck`. |
-| [.github/workflows/ci.yml](../.github/workflows/ci.yml) | CI: test + typecheck + check:apps. |
+| [.github/workflows/ci.yml](../.github/workflows/ci.yml) | CI (Build 19): `checks` job (gate + `typecheck:server` + `test:live`) ‖ `postgres` service job (`test:pg` + `test:ops`), locked `npm ci`. |
 
 ## Test map
 - [packages/api/gateway.test.ts](../packages/api/gateway.test.ts) — lifecycle on BOTH adapters + idempotency + change-feed.
@@ -119,7 +119,9 @@ tuned pool, non-root, versioned migrations, npm ci). **13** load/perf + SSE-cras
 independent-review defect fixes (metrics DoS, rate-limiter, SSE leak, shutdown parsing).
 **17** idempotent create. **18** production auth foundation (`/auth/*` issuer:
 scrypt + access/refresh + rotation/reuse-detection; migration v5 users+sessions;
-contract unchanged). Every "verified" build surfaced ≥1 real defect only reachable
+contract unchanged). **19** CI & production hardening (full pipeline in CI —
+`checks` + `postgres` jobs; server typecheck gated + fixed; `test:ops` asserts;
+`verify:full`). Every "verified" build surfaced ≥1 real defect only reachable
 by executing the real path — details + measured evidence in [BUILD_HISTORY.md](BUILD_HISTORY.md).
 
 ## Hard rules (do not violate)

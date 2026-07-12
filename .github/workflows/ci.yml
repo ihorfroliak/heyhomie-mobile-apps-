@@ -6,6 +6,7 @@ on:
   pull_request:
 
 jobs:
+  # Fast job — the gate + server static typecheck + live HTTP (memory repo, no infra).
   checks:
     runs-on: ubuntu-latest
     steps:
@@ -13,13 +14,49 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Domain & API tests
+          cache: npm
+      # Full workspace install so @heyhomie/* symlinks + server (fastify/pg/tsx) resolve.
+      - name: Install (workspaces, locked)
+        run: npm ci --no-audit --no-fund
+      - name: Domain & API tests (the gate)
         run: npm test
       - name: Type-check (domain / api / analytics)
         run: npm run typecheck
+      - name: Type-check server (fastify / pg)
+        run: npm run typecheck:server
       - name: App-screen sanity (brackets + design glyphs)
         run: npm run check:apps
-      - name: Install server workspace (fastify/pg/tsx)
-        run: npm install --workspace @heyhomie/server --no-audit --no-fund
-      - name: Live HTTP integration (real Fastify, memory repo)
+      - name: Live HTTP integration (real Fastify + auth, memory repo)
         run: npm run test:live
+
+  # Infra job — real PostgreSQL: CAS/tenant/migrations/auth persistence + ops readiness.
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: heyhomie
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # pg.test.ts / ops.ts default to :5434; point them at the CI service on :5432.
+      PG_URL: postgres://postgres:postgres@localhost:5432/heyhomie
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install (workspaces, locked)
+        run: npm ci --no-audit --no-fund
+      - name: PostgreSQL integration (CAS, tenant, migrations, auth persistence)
+        run: npm run test:pg
+      - name: Ops readiness (rolling deploy + leak soak, real pg)
+        run: npm run test:ops

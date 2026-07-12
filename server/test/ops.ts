@@ -57,7 +57,16 @@ async function main() {
     // consistency: every acknowledged create is present, no dupes
     const total = (await poolB.query(`SELECT count(*)::int AS c, count(DISTINCT id)::int AS d FROM orders WHERE tenant_id='O1'`)).rows[0];
     console.log(`  acknowledged creates=${created.length}, rows in pg=${total.c}, distinct=${total.d}, in-flight lost=${lost}`);
-    console.log(`  zero request loss: ${lost === 0 ? 'YES' : 'NO'} · zero duplicate writes: ${total.c === total.d ? 'YES' : 'NO'} · all acks persisted: ${total.c >= created.length ? 'YES' : 'NO'}`);
+    const noLoss = lost === 0, noDup = total.c === total.d, persisted = total.c >= created.length;
+    console.log(`  zero request loss: ${noLoss ? 'YES' : 'NO'} · zero duplicate writes: ${noDup ? 'YES' : 'NO'} · all acks persisted: ${persisted ? 'YES' : 'NO'}`);
+    // These are deterministic correctness invariants of a rolling deploy — a CI
+    // gate must FAIL (not just print NO) if any is violated. (Soak drift below
+    // stays informational: memory/handle numbers are evidence, not pass/fail.)
+    const opsFail: string[] = [];
+    if (!noLoss) opsFail.push(`in-flight request lost during drain (lost=${lost})`);
+    if (!noDup) opsFail.push(`duplicate writes (rows=${total.c} distinct=${total.d})`);
+    if (!persisted) opsFail.push(`acknowledged create missing from pg (rows=${total.c} < acks=${created.length})`);
+    if (!onB) opsFail.push("A's write not readable on B (shared truth broken)");
     await poolA.end();
 
     // ── PHASE 4 — long-running stability soak (~30s moderate load) ──
@@ -89,7 +98,8 @@ async function main() {
     console.log(`  rss drift ${first.rss}→${last.rss}MB (Δ${last.rss - first.rss}); handles ${first.handles}→${last.handles}; pool ${first.poolTot}→${last.poolTot} (bounded ≤10)`);
 
     await B.app.close(); await poolB.end();
-    console.log('\nops run complete.');
+    if (opsFail.length) { console.log('\nOPS FAILED:'); opsFail.forEach(f => console.log('  FAIL: ' + f)); process.exit(1); }
+    console.log('\nops run complete — rolling-deploy invariants held.');
     process.exit(0);
 }
 main().catch(e => { console.error(e); process.exit(1); });

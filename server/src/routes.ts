@@ -67,9 +67,13 @@ export function registerRoutes(app: FastifyInstance, service: OrderService, idem
 
     // transitions (idempotent). Cross-tenant → the service throws
     // FORBIDDEN_TENANT_ACCESS, surfaced as 403 by the error hook (index.ts).
+    // `body` is read as an optional {completedAt|now} but typed `unknown` at the
+    // route boundary (some transitions declare no Body generic) — cast at the read
+    // so the one handler shape is assignable to every app.post<> variant below.
     const mutate = (fn: (id: string, req: FastifyRequest, arg?: string) => Promise<ServerOrder | undefined>) =>
-        async (req: FastifyRequest & { params: { id: string }; body?: { completedAt?: string; now?: string } }) => {
-            const arg = req.body?.completedAt ?? req.body?.now;
+        async (req: FastifyRequest<{ Params: { id: string } }>) => {
+            const b = req.body as { completedAt?: string; now?: string } | undefined;
+            const arg = b?.completedAt ?? b?.now;
             const o = await fn(req.params.id, req, arg);
             return o ? toContractOrder(o) : null;
         };
