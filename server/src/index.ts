@@ -21,7 +21,7 @@ async function main() {
 
     // 3. The application (routes, auth, metrics, hooks) — repo-injected.
     const { app, beginShutdown } = buildApp(config, pgOrderRepo(pool), async () => { await pool.query('SELECT 1'); });
-    const DRAIN_MS = Number(process.env.SHUTDOWN_DRAIN_MS ?? 3000);
+    const DRAIN_MS = config.shutdownDrainMs; // validated at boot (fail-fast, C2)
 
     await app.listen({ port: config.port, host: '0.0.0.0' });
 
@@ -39,7 +39,13 @@ async function main() {
     }, 'startup_complete');
 
     // Graceful shutdown — drain connections, close the pool, then exit.
+    let shuttingDownStarted = false;
     const shutdown = async (signal: string) => {
+        // Re-entrancy guard (Build 16 / C3): a second SIGTERM/SIGINT during the
+        // drain window must not re-run app.close()/pool.end() (the 2nd pool.end()
+        // rejects → false exit(1) racing the first exit(0)).
+        if (shuttingDownStarted) { app.log.info({ signal }, 'shutdown_signal_ignored'); return; }
+        shuttingDownStarted = true;
         const t0 = Date.now();
         app.log.info({ signal, drainMs: DRAIN_MS }, 'shutdown_started');
         try {

@@ -19,6 +19,7 @@
     "test:live": "npx tsx server/test/live.test.ts",
     "test:pg": "npx tsx server/test/pg.test.ts",
     "test:ops": "npx tsx server/test/ops.ts",
+    "test:repro": "npx tsx server/test/repro.ts",
     "check": "npm test && npm run typecheck && npm run check:apps"
   },
   "engines": {

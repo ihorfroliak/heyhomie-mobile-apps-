@@ -69,11 +69,14 @@ export function registerStream(app: FastifyInstance, service: OrderService, metr
                 req.log.error({ correlationId: req.id, err: e }, 'sse_send_failed');
             }
         };
-        await send(); // initial snapshot (tenant-scoped)
         const unsub = service.subscribe(() => { void send(); });
         // Heartbeat comment keeps the connection alive through proxies and lets the
         // client's watchdog detect a dead link. Cleared on close (no timer leak).
         const heartbeat = setInterval(() => write(': ping\n\n'), 15_000);
+        // Register cleanup BEFORE any awaited work (Build 16 / C1): the initial
+        // `send()` awaits a DB query, and a client that disconnects during it emits
+        // 'close' once — if the handler were attached after the await it would miss
+        // the event and leak the subscription, heartbeat timer and gauge forever.
         req.raw.on('close', () => {
             if (closed) return;
             closed = true;
@@ -83,5 +86,6 @@ export function registerStream(app: FastifyInstance, service: OrderService, metr
             metrics?.sseConnections.add(-1);
             req.log.info({ correlationId: req.id, tenantId: auth.tenantId }, 'sse_disconnected');
         });
+        await send(); // initial snapshot (tenant-scoped) — cleanup already wired
     });
 }

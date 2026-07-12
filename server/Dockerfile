@@ -9,7 +9,7 @@ COPY packages ./packages
 COPY server ./server
 
 # H5 — reproducible install from the lockfile (npm ci), scoped to the server
-# workspace + its linked deps (@heyhomie/api, /domain, fastify, pg, tsx).
+# workspace + its linked deps (@heyhomie/api → transitively /domain, fastify, pg, tsx).
 RUN npm ci --include-workspace-root --workspace @heyhomie/server
 
 # H3 — run as the unprivileged built-in `node` user. Own /app so tsx's cache is

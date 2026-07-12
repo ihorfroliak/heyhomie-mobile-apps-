@@ -149,9 +149,10 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
         });
     }
 
-    // Graceful shutdown: SSE connections are long-lived and would block app.close()
-    // forever. Track their sockets and end them on close, so in-flight requests
-    // still drain cleanly (no forceCloseConnections → no dropped requests, Build 14).
+    // Graceful shutdown: end long-lived SSE sockets on close (a graceful FIN that
+    // flushes any pending frame) before `forceCloseConnections: true` (above) hard-
+    // closes the rest. In-flight requests are drained BEFORE close by the readiness
+    // flip + drain window in index.ts (the k8s preStop pattern), not by this hook.
     const sseSockets = new Set<{ end: () => void }>();
     app.addHook('onClose', async () => {
         for (const raw of sseSockets) { try { raw.end(); } catch { /* already closed */ } }

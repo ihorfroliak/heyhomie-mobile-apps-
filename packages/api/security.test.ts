@@ -66,6 +66,30 @@ ok('unknown fields dropped (not reflected)', !('evil' in validateSubmitOrderInpu
     ok('re-created bucket starts at capacity, not more', rl.allow('ip-1') && !rl.allow('ip-1'));
 }
 
+// ── C4 (Build 16): wall-clock rollback must not subtract tokens / spuriously 429 ──
+{
+    let clock = 100_000;
+    const rl = new RateLimiter({ capacity: 5, refillPerSec: 1, now: () => clock });
+    rl.allow('ip'); rl.allow('ip'); // ~3 tokens left
+    clock -= 30_000; // NTP step-back
+    ok('clock rollback does not deny a healthy bucket', rl.allow('ip') && rl.allow('ip') && rl.allow('ip'));
+}
+
+// ── C5 (Build 16): eviction is burst-safe when capacity > refill × idle window ──
+{
+    let clock = 0;
+    // capacity 5000, refill 10/s → time-to-full 500s; constructor must raise the
+    // effective idle window to 500s so an evict+recreate can't hand back full burst early.
+    const rl = new RateLimiter({ capacity: 5000, refillPerSec: 10, now: () => clock, idleEvictMs: 60_000 });
+    for (let i = 0; i < 1100; i++) rl.allow(`filler-${i}`); // grow map past sweep threshold
+    let drained = 0; for (let i = 0; i < 5000; i++) if (rl.allow('victim')) drained += 1;
+    eq('victim drained full burst', drained, 5000);
+    clock = 61_000; // 61s idle — LESS than the 500s effective window → NOT evicted
+    rl.allow('trigger');
+    let regained = 0; for (let i = 0; i < 5000; i++) if (rl.allow('victim')) regained += 1;
+    ok('idle 61s regains only ~refill (610), not full 5000 burst', regained > 0 && regained <= 700);
+}
+
 console.log(`\n${passed} passed, ${fail.length} failed`);
 if (fail.length) { fail.forEach(f => console.log('  FAIL: ' + f)); process.exit(1); }
 console.log('All security tests passed.');

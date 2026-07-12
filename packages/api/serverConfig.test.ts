@@ -29,6 +29,13 @@ ok('out-of-range PORT flagged', issues({ ...good, PORT: '70000' }).some(i => i.i
 ok('prod + default secret rejected', issues({ ...good, AUTH_SECRET: 'dev-secret-change-me', NODE_ENV: 'production' }).some(i => i.includes('default value in production')));
 ok('prod + dev mode rejected', issues({ ...good, AUTH_DEV_MODE: '1', NODE_ENV: 'production' }).some(i => i.includes('AUTH_DEV_MODE')));
 
+// SHUTDOWN_DRAIN_MS strict parse (Build 16 / C2): invalid must fail-fast, empty
+// must default to 3000 (never 0 → the drain-skip bug).
+ok('invalid SHUTDOWN_DRAIN_MS "3s" rejected', issues({ ...good, SHUTDOWN_DRAIN_MS: '3s' }).some(i => i.includes('SHUTDOWN_DRAIN_MS')));
+ok('negative SHUTDOWN_DRAIN_MS rejected', issues({ ...good, SHUTDOWN_DRAIN_MS: '-5' }).some(i => i.includes('SHUTDOWN_DRAIN_MS')));
+eq('empty SHUTDOWN_DRAIN_MS → default 3000 (not 0)', loadServerConfig({ ...good, SHUTDOWN_DRAIN_MS: '   ' }).shutdownDrainMs, 3000);
+eq('valid SHUTDOWN_DRAIN_MS parsed', loadServerConfig({ ...good, SHUTDOWN_DRAIN_MS: '5000' }).shutdownDrainMs, 5000);
+
 // aggregates ALL problems, not just the first
 ok('reports every issue at once', issues({ PORT: 'x' }).length >= 3);
 ok('ConfigError message lists issues', new ConfigError(['a', 'b']).message.includes('a') && new ConfigError(['a', 'b']).message.includes('b'));

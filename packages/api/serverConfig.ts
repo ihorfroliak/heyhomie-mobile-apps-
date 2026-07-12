@@ -14,6 +14,8 @@ export interface ServerConfig {
     /** Per-IP rate-limit token bucket (configurable so it's testable + tunable). */
     rateCapacity: number;
     rateRefillPerSec: number;
+    /** Graceful-shutdown drain window (ms): readiness→503, wait, then close. */
+    shutdownDrainMs: number;
 }
 
 export class ConfigError extends Error {
@@ -53,6 +55,13 @@ export function loadServerConfig(env: Record<string, string | undefined>): Serve
     const rateRefillPerSec = env.RATE_REFILL ? Number(env.RATE_REFILL) : 20;
     if (!(rateRefillPerSec > 0)) issues.push(`RATE_REFILL must be a positive number (got "${env.RATE_REFILL}")`);
 
+    // Strict parse (Build 16 / C2): a non-numeric/empty/negative SHUTDOWN_DRAIN_MS
+    // would coerce to 0 and silently skip the drain window (dropped in-flight
+    // requests on every deploy). Fail fast instead.
+    const drainRaw = env.SHUTDOWN_DRAIN_MS?.trim();
+    const shutdownDrainMs = drainRaw ? Number(drainRaw) : 3000;
+    if (!Number.isInteger(shutdownDrainMs) || shutdownDrainMs < 0) issues.push(`SHUTDOWN_DRAIN_MS must be a non-negative integer ms (got "${env.SHUTDOWN_DRAIN_MS}")`);
+
     if (issues.length) throw new ConfigError(issues);
-    return { databaseUrl: databaseUrl as string, port, authSecret: authSecret as string, devMode, production, trustProxy, rateCapacity, rateRefillPerSec };
+    return { databaseUrl: databaseUrl as string, port, authSecret: authSecret as string, devMode, production, trustProxy, rateCapacity, rateRefillPerSec, shutdownDrainMs };
 }
