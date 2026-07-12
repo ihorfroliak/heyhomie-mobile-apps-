@@ -41,9 +41,11 @@ export function verifyAuthToken(token: string, secret: string, opts?: VerifyToke
     }
 }
 
-// Public: health probes (orchestrators), /metrics (Prometheus scraper — counts
-// only, no data), dev token mint (dev-mode only route).
-const isPublic = (url: string) => url.startsWith('/health') || url.startsWith('/metrics') || url.startsWith('/dev/token');
+// Public (pre-auth): health probes (orchestrators), /metrics (Prometheus scraper
+// — counts only, no data), the auth issuer endpoints (register/login/refresh/
+// logout — they establish identity, so they cannot require a token), and the
+// dev token mint (dev-mode only route). All are still rate-limited.
+const isPublic = (url: string) => url.startsWith('/health') || url.startsWith('/metrics') || url.startsWith('/auth/') || url.startsWith('/dev/token');
 
 /** Fastify preHandler: extract + verify identity, attach `req.auth`, else 401. */
 export function authenticateRequest(secret: string, devMode: boolean) {

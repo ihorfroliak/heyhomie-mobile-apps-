@@ -25,7 +25,9 @@ const authB: AuthContext = { userId: 'b', tenantId: 'T2', role: 'member' };
 
 async function main() {
     const pool = makePool(PG_URL);
-    await pool.query('DROP TABLE IF EXISTS orders'); // clean slate (test db only)
+    await pool.query('DROP TABLE IF EXISTS auth_sessions'); // clean slate (test db only)
+    await pool.query('DROP TABLE IF EXISTS users');
+    await pool.query('DROP TABLE IF EXISTS orders');
     await pool.query('DROP TABLE IF EXISTS schema_migrations');
     await pool.query('DROP TYPE IF EXISTS order_status');
 
@@ -35,10 +37,10 @@ async function main() {
     const tMig = Date.now();
     const [runX, runY] = await Promise.all([runMigrations(pool), runMigrations(pool)]);
     console.log(`  [perf] concurrent migration on empty db: ${Date.now() - tMig}ms`);
-    eq('exactly 4 migrations applied across both starts', runX.length + runY.length, 4);
-    ok('one instance migrated, the other waited (0)', (runX.length === 4 && runY.length === 0) || (runY.length === 4 && runX.length === 0));
+    eq('exactly 5 migrations applied across both starts', runX.length + runY.length, 5);
+    ok('one instance migrated, the other waited (0)', (runX.length === 5 && runY.length === 0) || (runY.length === 5 && runX.length === 0));
     const hist = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-    eq('migration history records each version once', hist.rows.map((r: { version: number }) => Number(r.version)), [1, 2, 3, 4]);
+    eq('migration history records each version once', hist.rows.map((r: { version: number }) => Number(r.version)), [1, 2, 3, 4, 5]);
     eq('re-running migrations is a no-op (idempotent)', (await runMigrations(pool)).length, 0);
     await initSchema(pool); // the callers' entrypoint — also idempotent
     const cols = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'orders'`);
@@ -175,6 +177,46 @@ async function main() {
         ok('distinct forwarded IPs get separate buckets (no 429)', !distinct.includes(429) && distinct.every(s => s === 401));
         await app.close();
         await lp.end();
+    }
+
+    // ── Build 18: production auth on REAL Postgres (users + revocable sessions) ──
+    {
+        const { pgAuthRepo } = await import('../src/pgAuthRepo.js');
+        const { makeAuthCrypto } = await import('../src/authCrypto.js');
+        const { makeAuthService } = await import('@heyhomie/api');
+        const authRepo = pgAuthRepo(pool);
+        const svc = makeAuthService(authRepo, makeAuthCrypto('pg-auth-secret-16chars-xx', 900), { refreshTtlSec: 3600 });
+
+        const reg = await svc.register({ email: 'owner@pg.pl', password: 'Sup3rSecret!' });
+        ok('register persists a user + issues tokens', !!reg.accessToken && !!reg.refreshToken);
+        // password stored hashed (scrypt), never plaintext
+        const urow = await pool.query('SELECT password_hash, tenant_id FROM users WHERE email = $1', ['owner@pg.pl']);
+        ok('password stored hashed (not plaintext)', urow.rows[0].password_hash !== 'Sup3rSecret!' && urow.rows[0].password_hash.length > 20);
+
+        // DB-level unique email
+        let dupBlocked = false;
+        try { await svc.register({ email: 'owner@pg.pl', password: 'Another1!' }); } catch { dupBlocked = true; }
+        ok('duplicate email rejected (DB unique + ConflictError)', dupBlocked);
+
+        // login + refresh rotation persists (old row revoked, new row live)
+        const login = await svc.login({ email: 'owner@pg.pl', password: 'Sup3rSecret!' });
+        const rot = await svc.refresh(login.refreshToken);
+        ok('refresh rotates over pg', rot.refreshToken !== login.refreshToken);
+        const revokedCount = await pool.query('SELECT count(*) FROM auth_sessions WHERE revoked_at IS NOT NULL');
+        ok('rotated session marked revoked in DB', Number(revokedCount.rows[0].count) >= 1);
+
+        // reuse detection revokes the family, durable across a fresh connection
+        let reuseRejected = false;
+        try { await svc.refresh(login.refreshToken); } catch { reuseRejected = true; }
+        ok('reused refresh rejected over pg', reuseRejected);
+        {
+            const p2 = makePool(PG_URL);
+            const svc2 = makeAuthService(pgAuthRepo(p2), makeAuthCrypto('pg-auth-secret-16chars-xx', 900), { refreshTtlSec: 3600 });
+            let familyDead = false;
+            try { await svc2.refresh(rot.refreshToken); } catch { familyDead = true; }
+            ok('theft-revoked family stays dead on a fresh connection (durable)', familyDead);
+            await p2.end();
+        }
     }
 
     await pool.end();

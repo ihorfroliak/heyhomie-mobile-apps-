@@ -15,8 +15,14 @@ const ok = (n: string, c: boolean) => (c ? passed++ : fail.push(n));
     ok('token stored under the namespaced key', (await store.getItem(TOKEN_KEY)) === 'tok_123');
     ok('session reads the token', (await session.getToken()) === 'tok_123');
 
+    // Build 18: access + refresh pair
+    await session.setTokens({ accessToken: 'acc_1', refreshToken: 'ref_1' });
+    ok('setTokens stores the access token', (await session.getToken()) === 'acc_1');
+    ok('setTokens stores the refresh token', (await session.getRefreshToken()) === 'ref_1');
+
     await session.clear();
     ok('clear wipes the token (sign-out)', (await session.getToken()) === null);
+    ok('clear wipes the refresh token too', (await session.getRefreshToken()) === null);
 
     console.log(`\n${passed} passed, ${fail.length} failed`);
     if (fail.length) {

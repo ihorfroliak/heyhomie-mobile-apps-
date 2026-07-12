@@ -7,6 +7,8 @@ import { readFileSync } from 'node:fs';
 import { loadServerConfig, ConfigError } from '@heyhomie/api';
 import { makePool, initSchema } from './db.js';
 import { pgOrderRepo } from './pgRepo.js';
+import { pgAuthRepo } from './pgAuthRepo.js';
+import { makeAuthCrypto } from './authCrypto.js';
 import { buildApp } from './app.js';
 
 async function main() {
@@ -19,8 +21,10 @@ async function main() {
     await pool.query('SELECT 1'); // startup DB reachability check (fail fast)
     await initSchema(pool);
 
-    // 3. The application (routes, auth, metrics, hooks) — repo-injected.
-    const { app, beginShutdown } = buildApp(config, pgOrderRepo(pool), async () => { await pool.query('SELECT 1'); });
+    // 3. The application (routes, auth, metrics, hooks) — repo-injected. Auth
+    //    issuer wired with real crypto (scrypt/HMAC) + the Postgres auth repo.
+    const authDeps = { repo: pgAuthRepo(pool), crypto: makeAuthCrypto(config.authSecret, config.accessTtlSec) };
+    const { app, beginShutdown } = buildApp(config, pgOrderRepo(pool), async () => { await pool.query('SELECT 1'); }, authDeps);
     const DRAIN_MS = config.shutdownDrainMs; // validated at boot (fail-fast, C2)
 
     await app.listen({ port: config.port, host: '0.0.0.0' });

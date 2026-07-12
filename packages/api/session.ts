@@ -30,13 +30,24 @@ export function memorySecureStore(): SecureStore {
 }
 
 export const TOKEN_KEY = 'heyhomie.auth.token';
+export const REFRESH_KEY = 'heyhomie.auth.refresh';
 
 export function createSession(store: SecureStore) {
     return {
         getToken: () => store.getItem(TOKEN_KEY),
         setToken: (token: string) => store.setItem(TOKEN_KEY, token),
-        /** Full sign-out: wipe the token from secure storage. */
-        clear: () => store.deleteItem(TOKEN_KEY),
+        /** Build 18: the long-lived refresh token (used to mint fresh access tokens). */
+        getRefreshToken: () => store.getItem(REFRESH_KEY),
+        /** Persist the access + refresh pair returned by /auth/login|register|refresh. */
+        async setTokens(tokens: { accessToken: string; refreshToken: string }): Promise<void> {
+            await store.setItem(TOKEN_KEY, tokens.accessToken);
+            await store.setItem(REFRESH_KEY, tokens.refreshToken);
+        },
+        /** Full sign-out: wipe BOTH tokens from secure storage. */
+        async clear(): Promise<void> {
+            await store.deleteItem(TOKEN_KEY);
+            await store.deleteItem(REFRESH_KEY);
+        },
     };
 }
 

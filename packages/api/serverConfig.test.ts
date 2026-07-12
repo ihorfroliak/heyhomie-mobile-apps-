@@ -36,6 +36,13 @@ ok('negative SHUTDOWN_DRAIN_MS rejected', issues({ ...good, SHUTDOWN_DRAIN_MS: '
 eq('empty SHUTDOWN_DRAIN_MS → default 3000 (not 0)', loadServerConfig({ ...good, SHUTDOWN_DRAIN_MS: '   ' }).shutdownDrainMs, 3000);
 eq('valid SHUTDOWN_DRAIN_MS parsed', loadServerConfig({ ...good, SHUTDOWN_DRAIN_MS: '5000' }).shutdownDrainMs, 5000);
 
+// token lifetimes (Build 18): sane defaults + strict parse + ordering invariant
+eq('access TTL default 900s', cfg.accessTtlSec, 900);
+eq('refresh TTL default 30d', cfg.refreshTtlSec, 2_592_000);
+ok('invalid AUTH_ACCESS_TTL_SEC rejected', issues({ ...good, AUTH_ACCESS_TTL_SEC: '15m' }).some(i => i.includes('AUTH_ACCESS_TTL_SEC')));
+ok('access ≥ refresh rejected', issues({ ...good, AUTH_ACCESS_TTL_SEC: '4000', AUTH_REFRESH_TTL_SEC: '1000' }).some(i => i.includes('shorter than')));
+eq('custom refresh TTL parsed', loadServerConfig({ ...good, AUTH_REFRESH_TTL_SEC: '604800' }).refreshTtlSec, 604_800);
+
 // aggregates ALL problems, not just the first
 ok('reports every issue at once', issues({ PORT: 'x' }).length >= 3);
 ok('ConfigError message lists issues', new ConfigError(['a', 'b']).message.includes('a') && new ConfigError(['a', 'b']).message.includes('b'));

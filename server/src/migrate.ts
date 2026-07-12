@@ -54,6 +54,34 @@ const MIGRATIONS: Migration[] = [
         name: 'tenant_created_index',
         sql: `CREATE INDEX IF NOT EXISTS orders_tenant_created_idx ON orders (tenant_id, created_at);`,
     },
+    {
+        // Build 18 — production auth. Users (credential holders) + revocable
+        // refresh sessions. Additive; does not touch `orders`. Email + refresh_hash
+        // are UNIQUE at the DB (enumeration/dedup guarantees don't rely on app code).
+        version: 5,
+        name: 'auth_users_and_sessions',
+        sql: `
+            CREATE TABLE IF NOT EXISTS users (
+                id            text PRIMARY KEY,
+                tenant_id     text        NOT NULL,
+                email         text        NOT NULL UNIQUE,
+                role          text        NOT NULL DEFAULT 'member',
+                password_hash text        NOT NULL,
+                password_salt text        NOT NULL,
+                created_at    timestamptz NOT NULL DEFAULT now()
+            );
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                id           text PRIMARY KEY,
+                user_id      text        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                tenant_id    text        NOT NULL,
+                role         text        NOT NULL,
+                refresh_hash text        NOT NULL UNIQUE,
+                expires_at   timestamptz NOT NULL,
+                created_at   timestamptz NOT NULL DEFAULT now(),
+                revoked_at   timestamptz
+            );
+            CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions (user_id);`,
+    },
 ];
 
 export async function runMigrations(pool: Pool): Promise<number[]> {

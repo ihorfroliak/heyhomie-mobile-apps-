@@ -96,7 +96,14 @@ UI (apps/*)  ──imports only──►  orderGateway  (packages/api/orderContr
   drops it (no leak to the contract `Order`).
 - Server trust boundary: `server/src/auth.ts` — HMAC sign/verify (node:crypto, timing-safe),
   `authenticateRequest` preHandler (Bearer or dev `x-dev-*` headers when `AUTH_DEV_MODE=1`).
-- DB: `orders.tenant_id` NOT NULL + indexed, pinned on update.
+- **Credential issuer (Build 18)**: `packages/api/authSession.ts` — pure `makeAuthService`
+  (injected `AuthRepo`+`AuthCrypto`, mirrors `orderService`) → `/auth/{register,login,refresh,
+  logout}`. Email+password (scrypt, server-side), existing HMAC token as the **access token**
+  + opaque **refresh token** (sha256-hashed at rest, single-use rotation, reuse → revoke family).
+  Server: `authCrypto.ts` (node:crypto) + `pgAuthRepo.ts`; migration v5 (`users`+`auth_sessions`).
+  Replaces dev-only `/dev/token` as the issuer. Contract + access-token format unchanged.
+- DB: `orders.tenant_id` NOT NULL + indexed, pinned on update. `users` (email UNIQUE, scrypt)
+  + `auth_sessions` (refresh_hash UNIQUE, expires_at, revoked_at) — Build 18.
 
 ## 4. How to run
 
@@ -133,9 +140,11 @@ auth+tenant logic, the Fastify server source, the pure order service.
 
 **Infrastructure pending (needs external, cannot run in-session — no node_modules/Docker/pg):**
 - Deploy the server + provision Postgres + real `AUTH_SECRET`.
-- A login endpoint that mints the signed token (issuer).
-- Flip the gateway binding + point at `EXPO_PUBLIC_ORDERS_API_URL`.
-- The live HMAC/HTTP/SSE path is unexercised (verified by inspection + the in-process fake).
+- ~~A login endpoint that mints the signed token (issuer).~~ **DONE — Build 18** (`/auth/*`).
+- Flip the gateway binding + point at `EXPO_PUBLIC_ORDERS_API_URL`; wire the app login
+  screen to `/auth/*` (persist tokens via `session.setTokens`; `getToken` feeds the gateway).
+- The live HMAC/HTTP/SSE + auth path IS now exercised by `test:live` (real scrypt/HMAC) +
+  `test:pg` (real users/sessions); production deploy still unrun.
 
 ## 7. Git
 

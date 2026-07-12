@@ -6,10 +6,10 @@
  */
 import Fastify, { type FastifyInstance } from 'fastify';
 import {
-    makeOrderService, fromUnknown, AppError, RateLimiter, RateLimitedError, IdempotencyStore,
-    type AuthContext, type Role, type OrderRepo, type ServerConfig, type SubmitOrderResult,
+    makeOrderService, makeAuthService, fromUnknown, AppError, RateLimiter, RateLimitedError, IdempotencyStore,
+    type AuthContext, type AuthRepo, type AuthCrypto, type Role, type OrderRepo, type ServerConfig, type SubmitOrderResult,
 } from '@heyhomie/api';
-import { registerRoutes, registerStream } from './routes.js';
+import { registerRoutes, registerStream, registerAuthRoutes } from './routes.js';
 import { authenticateRequest, signAuthToken } from './auth.js';
 import { makeServerMetrics, type ServerMetrics } from './metrics.js';
 
@@ -20,7 +20,12 @@ export interface BuiltApp {
     beginShutdown: () => void;
 }
 
-export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => Promise<void>): BuiltApp {
+/** Optional auth wiring — injected like the OrderRepo (real crypto+pg in prod,
+ *  memory in tests). When omitted, the /auth issuer routes aren't registered
+ *  (keeps existing buildApp callers working; back-compat). */
+export interface AuthDeps { repo: AuthRepo; crypto: AuthCrypto; }
+
+export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => Promise<void>, authDeps?: AuthDeps): BuiltApp {
     const metrics = makeServerMetrics();
     const service = makeOrderService(repo, metrics.serviceTelemetry);
 
@@ -157,6 +162,16 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
     app.addHook('onClose', async () => {
         for (const raw of sseSockets) { try { raw.end(); } catch { /* already closed */ } }
     });
+
+    // Auth issuer routes (Build 18) must be registered BEFORE the authenticate
+    // preHandler is a no-op for them (they're in isPublic) — but register them
+    // here so they exist. The pure AuthService orchestrates over injected crypto+repo.
+    if (authDeps) {
+        // access-TTL is baked into the crypto adapter (makeAuthCrypto); the service
+        // only owns the refresh lifetime.
+        const authService = makeAuthService(authDeps.repo, authDeps.crypto, { refreshTtlSec: config.refreshTtlSec });
+        registerAuthRoutes(app, authService);
+    }
 
     app.addHook('preHandler', authenticateRequest(config.authSecret, config.devMode));
     // Create-dedup store (Build 17): 10-min TTL, tenant-scoped by the route.

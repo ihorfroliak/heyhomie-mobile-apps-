@@ -8,13 +8,13 @@ Latest build → [BUILD_HISTORY.md](BUILD_HISTORY.md). Gate (`npm run check`): a
 | Production | ~82 | full stack runs correctly on real docker+pg; external infra pending |
 | Reliability | 89 | CAS exactly-once, restart recovery, SSE-leak + shutdown re-entrancy fixed |
 | Correctness/Concurrency | 84 | 100-parallel exactly-once (real pg), property tests, terminal invariants + DB CHECK |
-| Security | 82 | HMAC token exp+skew, tenant isolation (service+repo+CHECK), rate-limit hardened, redaction, no SQL/JSON injection (parameterized) |
+| Security | 85 | credential auth issuer (scrypt, access+refresh, single-use rotation w/ reuse-detection, enumeration-safe), HMAC token exp+skew, tenant isolation (service+repo+CHECK), rate-limit hardened, redaction, no SQL/JSON injection (parameterized) |
 | Observability | 78 | Prometheus `/metrics`, correlation ids end-to-end, structured logs, incident playbook |
 | Operations | 81 | k8s graceful shutdown, rolling deploy, backup/restore, health probes — all measured |
 | Deployment | 85 | docker build + compose healthy + restart verified; non-root, reproducible build |
 | Infrastructure | 78 | containerized stack proven; single-instance (multi-instance needs shared state) |
 | Maintainability | 85 | clean layering, anti-dep guard, frozen contract, docs |
-| Testability | 91 | 628 gated assertions + pg/live/ops/load/repro harnesses |
+| Testability | 91 | 667 gated assertions + pg/live/ops/load/repro harnesses (auth: pure gate + real scrypt/HMAC over HTTP + pg persistence) |
 | Scalability | ~50 | DB indexed/efficient; SSE full-snapshot + unpaginated list are the ceilings |
 
 ## Performance baseline (Build 13, measured on real Postgres via `test:load`)
@@ -37,21 +37,21 @@ clients ≈7MB/client, broadcast ≈6.8s at 5.5k orders (the full-snapshot scale
 Bottlenecks = unpaginated list + full-snapshot SSE (both contract-versioned work — see [OPEN_ITEMS.md](OPEN_ITEMS.md)).
 
 ## CODE COMPLETE (verified in-repo)
-Domain rules, OrderGateway contract + both adapters, authoritative `orderService` (CAS, tenant), auth+HMAC, Fastify server (routes/SSE/metrics/migrations/graceful-shutdown), Docker image + compose. Proven on real Postgres 16 + real HTTP + real docker signals.
+Domain rules, OrderGateway contract + both adapters, authoritative `orderService` (CAS, tenant), auth+HMAC + **credential issuer** (`/auth/*`: scrypt, access+refresh, rotation/reuse-detection — Build 18), Fastify server (routes/SSE/metrics/migrations/graceful-shutdown), Docker image + compose. Proven on real Postgres 16 + real HTTP + real docker signals.
 
 ## INFRASTRUCTURE PENDING (external — not repo defects)
 - TLS / DNS / hosting; reverse proxy + `TRUST_PROXY=1` (real client IP); managed Postgres.
-- Secrets manager (real `AUTH_SECRET`); token issuer (login endpoint that mints the signed token).
+- Secrets manager (real `AUTH_SECRET`). Token **issuer is in-repo** (Build 18, `/auth/*`); external SMS/OAuth issuers optional later.
 - Stripe + email provider credentials; monitoring stack scraping `/metrics`.
 - k8s: `terminationGracePeriodSeconds` > `SHUTDOWN_DRAIN_MS`, preStop, readiness probe wired to `/health/ready`.
 - Multi-instance: shared rate-limit store + Postgres `LISTEN/NOTIFY` for SSE fan-out.
 
 ## Deployment checklist
 - [ ] `docker compose up --build` → healthy (verified locally; needs a host)
-- [ ] real `AUTH_SECRET` (≥16), `NODE_ENV=production`, `AUTH_DEV_MODE=0`, valid `SHUTDOWN_DRAIN_MS`
+- [ ] real `AUTH_SECRET` (≥16), `NODE_ENV=production`, `AUTH_DEV_MODE=0`, valid `SHUTDOWN_DRAIN_MS`, `AUTH_ACCESS_TTL_SEC` < `AUTH_REFRESH_TTL_SEC`
 - [ ] managed `DATABASE_URL`; migrations run automatically at boot (advisory-locked, idempotent)
 - [ ] TLS/proxy + `TRUST_PROXY=1`; wire `/health/ready` probe
-- [ ] token issuer + secrets; Stripe/email creds; scrape `/metrics`
+- [ ] secrets (`AUTH_SECRET`); Stripe/email creds; scrape `/metrics` (issuer `/auth/*` ships in-repo)
 
 ## Verdict
 **Approved for a single-instance, reverse-proxied pilot** (real Postgres, real secret, TRUST_PROXY). **Not yet** for multi-instance horizontal scale (SSE fan-out, shared rate-limit) or large-tenant read fan-out (needs a contract-versioned pagination/delta — see [OPEN_ITEMS.md](OPEN_ITEMS.md)). No in-repo code or packaging blocker remains.

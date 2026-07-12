@@ -11,13 +11,19 @@ Grouped by whether it's a future code change, an intentional trade-off, or exter
    content-hash `Idempotency-Key`; server dedups create by `(tenantId, key)` in a
    10-min TTL store → identical retry/double-tap returns the same order. Additive,
    no contract change. (`packages/api/idempotency.ts`, `server/src/routes.ts`.)
-3. **Real payment/notification transport** — `notifyClient` is a console mock; Stripe
+3. **Auth: additional issuers + lifecycle** (foundation shipped Build 18 —
+   email+password, access+refresh, rotation/reuse-detection). Future: SMS-OTP /
+   OAuth issuers (behind the same token-mint seam), **member invites** (non-admin
+   users within a tenant — self-register only creates a tenant-owning admin today),
+   password reset, and a periodic GC for expired/revoked `auth_sessions` rows
+   (kept for reuse-detection; unbounded without a sweep).
+4. **Real payment/notification transport** — `notifyClient` is a console mock; Stripe
    + Fakturownia + email/SMS adapters are seams (`accountingClient`/`marketingClient`
    are mock/legacy). Wire when credentials exist.
-4. **Prune legacy seam** — `packages/api/{config,homieClient,accountingClient,marketingClient}.ts`
+5. **Prune legacy seam** — `packages/api/{config,homieClient,accountingClient,marketingClient}.ts`
    + root `.env.example` reference the pre-Build-04 Rails/Go backends. Inert but stale;
    delete when confirmed unused by any screen.
-5. **Fold `toCanonical` into `errors.ts`** — the 4xx-transport→canonical mapping lives
+6. **Fold `toCanonical` into `errors.ts`** — the 4xx-transport→canonical mapping lives
    in `server/src/app.ts`; `fromUnknown` (shared) still wraps a 4xx throwable as 500.
    Latent (single caller today) — fix when a 2nd boundary calls `fromUnknown`.
 
@@ -33,8 +39,15 @@ Grouped by whether it's a future code change, an intentional trade-off, or exter
 - **`tsx` runtime in the image** (no precompile): 61ms boot — fine for MVP.
 
 ## External infrastructure (see [PRODUCTION_STATUS.md](PRODUCTION_STATUS.md))
-TLS/DNS/host · managed Postgres · secrets manager · token issuer · Stripe/email
-creds · monitoring · k8s probe/preStop wiring · shared state for multi-instance.
+TLS/DNS/host · managed Postgres · secrets manager · Stripe/email creds · monitoring ·
+k8s probe/preStop wiring · shared state for multi-instance. (Token **issuer** now
+in-repo — Build 18; a real `AUTH_SECRET` from the secrets manager is still external.)
+
+## Known build-gate gaps (repo hygiene)
+- **`server/` is not in the typecheck gate.** `tsc -p server/tsconfig.json` has 3
+  pre-existing errors in the `mutate` helper (`routes.ts`) — a route-generic typing
+  issue, not a runtime defect (tsx strips types; behaviour proven by `test:live`/`test:pg`).
+  Add `server/` typecheck + `test:pg`/`test:live` to CI, then fix the 3 errors.
 
 ## Legacy docs to reconcile (repo hygiene)
 Root `ARCHITECTURE.md` + `INTEGRATION.md` describe the pre-Build-04 external

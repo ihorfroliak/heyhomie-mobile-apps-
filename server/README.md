@@ -59,13 +59,26 @@ export const orderGateway = makeHttpOrderGateway(httpOrderPort({ baseUrl: proces
 No UI changes. The contract test (`packages/api/gateway.test.ts`) already proves
 the Http adapter satisfies the same lifecycle as Local via the in-process fake.
 
-## Auth + tenancy (Build 05)
+## Auth + tenancy (Build 05, issuer added Build 18)
 
 - Every request needs a bearer token: `Authorization: Bearer <token>`. Tokens are
   HMAC-signed with `AUTH_SECRET` (server-verified — spoofing without the signature
   is rejected). SSE passes the token as `?token=` (headers not settable on EventSource).
+- **Login (Build 18)** — the real credential issuer (`/auth/*`, public + rate-limited):
+
+  | Method | Path | Body | Returns |
+  |---|---|---|---|
+  | POST | `/auth/register` | `{email,password}` | `201 {accessToken,refreshToken,expiresIn}` — provisions a business (new tenant + admin) |
+  | POST | `/auth/login` | `{email,password}` | `200 {accessToken,refreshToken,expiresIn}` |
+  | POST | `/auth/refresh` | `{refreshToken}` | `200 {…}` — rotates (single-use; reuse → whole family revoked) |
+  | POST | `/auth/logout` | `{refreshToken}` | `204` — revokes the session |
+
+  Passwords are scrypt-hashed (per-user salt). The **access token** is the same
+  short-lived HMAC token as before (`AUTH_ACCESS_TTL_SEC`, default 15 min); the
+  **refresh token** is opaque, stored sha256-hashed, long-lived (`AUTH_REFRESH_TTL_SEC`,
+  default 30 d) and revocable. The response never echoes `tenantId` (stays server-side).
 - Dev fallback (`AUTH_DEV_MODE=1`): `x-dev-tenant` / `x-dev-user` / `x-dev-role`
-  headers, and `GET /dev/token?tenant=&user=&role=` to mint a signed token.
+  headers, and `GET /dev/token?tenant=&user=&role=` to mint a signed token (local only).
 - Tenant isolation is enforced in the **service + repo**, never the UI: reads are
   scoped by `tenant_id`; cross-tenant/missing mutations → `403 FORBIDDEN_TENANT_ACCESS`.
   `orders.tenant_id` is indexed and pinned on update (a row can't change tenant).
@@ -89,8 +102,10 @@ export const orderGateway = makeHttpOrderGateway(httpOrderPort({
 
 ## Scope / limits (honest)
 
-- Single domain: `orders`. No OAuth, no JWT refresh, no DB sessions, no Stripe SDK,
-  no queues, no rate limiting (out of Build 05 scope).
+- Auth is email+password (scrypt) with access/refresh tokens (Build 18). No OAuth /
+  social / SMS-OTP issuers yet — those layer on behind the same token-mint seam.
+  No JWT lib (opaque HMAC). Member invites (non-admin users in a tenant) not yet.
+- Single domain: `orders`. No Stripe SDK, no queues.
 - SSE is single-instance; horizontal scale needs Postgres `LISTEN/NOTIFY`.
 - Order money-status logic is the shared domain payment lifecycle — Local and
   Http adapters cannot diverge.

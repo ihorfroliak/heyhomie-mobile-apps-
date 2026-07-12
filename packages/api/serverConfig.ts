@@ -16,6 +16,10 @@ export interface ServerConfig {
     rateRefillPerSec: number;
     /** Graceful-shutdown drain window (ms): readiness→503, wait, then close. */
     shutdownDrainMs: number;
+    /** Access-token TTL (sec) — the short-lived HMAC bearer token. */
+    accessTtlSec: number;
+    /** Refresh-token TTL (sec) — the long-lived, revocable session. */
+    refreshTtlSec: number;
 }
 
 export class ConfigError extends Error {
@@ -62,6 +66,16 @@ export function loadServerConfig(env: Record<string, string | undefined>): Serve
     const shutdownDrainMs = drainRaw ? Number(drainRaw) : 3000;
     if (!Number.isInteger(shutdownDrainMs) || shutdownDrainMs < 0) issues.push(`SHUTDOWN_DRAIN_MS must be a non-negative integer ms (got "${env.SHUTDOWN_DRAIN_MS}")`);
 
+    // Token lifetimes (Build 18). Access short (replay window), refresh long
+    // (revocable). Both strict-parsed & positive, same fail-fast contract as above.
+    const accessRaw = env.AUTH_ACCESS_TTL_SEC?.trim();
+    const accessTtlSec = accessRaw ? Number(accessRaw) : 900; // 15 min
+    if (!Number.isInteger(accessTtlSec) || accessTtlSec < 1) issues.push(`AUTH_ACCESS_TTL_SEC must be a positive integer seconds (got "${env.AUTH_ACCESS_TTL_SEC}")`);
+    const refreshRaw = env.AUTH_REFRESH_TTL_SEC?.trim();
+    const refreshTtlSec = refreshRaw ? Number(refreshRaw) : 2_592_000; // 30 days
+    if (!Number.isInteger(refreshTtlSec) || refreshTtlSec < 1) issues.push(`AUTH_REFRESH_TTL_SEC must be a positive integer seconds (got "${env.AUTH_REFRESH_TTL_SEC}")`);
+    if (accessTtlSec >= refreshTtlSec) issues.push('AUTH_ACCESS_TTL_SEC must be shorter than AUTH_REFRESH_TTL_SEC');
+
     if (issues.length) throw new ConfigError(issues);
-    return { databaseUrl: databaseUrl as string, port, authSecret: authSecret as string, devMode, production, trustProxy, rateCapacity, rateRefillPerSec, shutdownDrainMs };
+    return { databaseUrl: databaseUrl as string, port, authSecret: authSecret as string, devMode, production, trustProxy, rateCapacity, rateRefillPerSec, shutdownDrainMs, accessTtlSec, refreshTtlSec };
 }

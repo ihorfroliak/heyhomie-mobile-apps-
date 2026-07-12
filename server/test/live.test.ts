@@ -8,9 +8,10 @@
  *
  * Run: npx tsx server/test/live.test.ts
  */
-import { memoryOrderRepo, makeHttpOrderGateway, httpOrderPort, loadServerConfig, type Order } from '@heyhomie/api';
+import { memoryOrderRepo, memoryAuthRepo, makeHttpOrderGateway, httpOrderPort, loadServerConfig, type Order } from '@heyhomie/api';
 import { buildApp } from '../src/app.js';
 import { signAuthToken } from '../src/auth.js';
+import { makeAuthCrypto } from '../src/authCrypto.js';
 
 let passed = 0;
 const fail: string[] = [];
@@ -60,7 +61,10 @@ async function main() {
     const bootT0 = Date.now();
     // PORT in config is validated (1..65535); the test listens on an ephemeral port explicitly.
     const config = loadServerConfig({ DATABASE_URL: 'postgres://unused/live', AUTH_SECRET, PORT: '8091', AUTH_DEV_MODE: '1' });
-    const { app } = buildApp(config, memoryOrderRepo(), async () => { /* memory db always up */ });
+    // Build 18: wire the real crypto (scrypt/HMAC) over a memory auth repo so the
+    // full register→login→refresh→logout path runs over genuine HTTP without pg.
+    const authDeps = { repo: memoryAuthRepo(), crypto: makeAuthCrypto(AUTH_SECRET, config.accessTtlSec) };
+    const { app } = buildApp(config, memoryOrderRepo(), async () => { /* memory db always up */ }, authDeps);
     await app.listen({ port: 0, host: '127.0.0.1' });
     const bootMs = Date.now() - bootT0;
     const addr = app.server.address() as { port: number };
@@ -88,6 +92,47 @@ async function main() {
     const good = signAuthToken({ userId: 'u', tenantId: 't1', role: 'member' }, AUTH_SECRET);
     const tampered = good.slice(0, good.length - 4) + 'AAAA';
     eq('tampered token → 401', (await fetch(`${base}/orders`, { headers: { authorization: `Bearer ${tampered}` } })).status, 401);
+
+    // ── Build 18: production auth issuer over real HTTP (real scrypt + HMAC) ──
+    const jsonHdr = { 'content-type': 'application/json' };
+    const authPost = async (path: string, payload: unknown) => {
+        const res = await fetch(`${base}${path}`, { method: 'POST', headers: jsonHdr, body: JSON.stringify(payload) });
+        return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, unknown> };
+    };
+    const reg = await authPost('/auth/register', { email: 'boss@acme.pl', password: 'Sup3rSecret!' });
+    eq('register → 201', reg.status, 201);
+    ok('register returns access + refresh', typeof reg.body.accessToken === 'string' && typeof reg.body.refreshToken === 'string');
+    ok('register never leaks tenantId to the client', !('identity' in reg.body) && !('tenantId' in reg.body));
+    // the minted access token actually authorizes real order calls
+    const regTok = reg.body.accessToken as string;
+    eq('minted access token authorizes /orders', (await fetch(`${base}/orders`, { headers: { authorization: `Bearer ${regTok}` } })).status, 200);
+
+    const dup = await authPost('/auth/register', { email: 'boss@acme.pl', password: 'Different1!' });
+    eq('duplicate email → 409 canonical', [dup.status, dup.body.code], [409, 'CONFLICT']);
+
+    const login = await authPost('/auth/login', { email: 'BOSS@acme.pl', password: 'Sup3rSecret!' });
+    eq('login (email case-insensitive) → 200', login.status, 200);
+    const badPw = await authPost('/auth/login', { email: 'boss@acme.pl', password: 'wrong-password' });
+    eq('wrong password → 401', badPw.status, 401);
+    const ghost = await authPost('/auth/login', { email: 'nobody@acme.pl', password: 'Sup3rSecret!' });
+    eq('unknown email → 401 (same as wrong password, no enumeration)', [ghost.status, ghost.body.code], [401, 'UNAUTHENTICATED']);
+
+    // refresh rotation: new pair issued, the presented refresh becomes single-use
+    const refresh1 = await authPost('/auth/refresh', { refreshToken: login.body.refreshToken });
+    eq('refresh → 200', refresh1.status, 200);
+    ok('refresh rotates the refresh token', refresh1.body.refreshToken !== login.body.refreshToken);
+    ok('rotated access token authorizes /orders', (await fetch(`${base}/orders`, { headers: { authorization: `Bearer ${refresh1.body.accessToken}` } })).status === 200);
+    const reuse = await authPost('/auth/refresh', { refreshToken: login.body.refreshToken });
+    eq('reused (rotated) refresh → 401', reuse.status, 401);
+    // theft response revoked the whole family → even the rotated-in token is dead
+    const family = await authPost('/auth/refresh', { refreshToken: refresh1.body.refreshToken });
+    eq('reuse detection revokes the rotated-in token too → 401', family.status, 401);
+
+    // logout revokes; a subsequent refresh is rejected
+    const fresh = await authPost('/auth/login', { email: 'boss@acme.pl', password: 'Sup3rSecret!' });
+    eq('logout → 204', (await fetch(`${base}/auth/logout`, { method: 'POST', headers: jsonHdr, body: JSON.stringify({ refreshToken: fresh.body.refreshToken }) })).status, 204);
+    eq('refresh after logout → 401', (await authPost('/auth/refresh', { refreshToken: fresh.body.refreshToken })).status, 401);
+    eq('short password → 400 validation', (await authPost('/auth/register', { email: 'weak@acme.pl', password: 'short' })).status, 400);
 
     // invalid + oversized bodies
     const authHdr = { authorization: `Bearer ${good}`, 'content-type': 'application/json' };

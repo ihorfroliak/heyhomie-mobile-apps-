@@ -44,6 +44,7 @@ Full diagram: [PROJECT_STATE.md §2](PROJECT_STATE.md).
 | [fakeBackend.ts](../packages/api/fakeBackend.ts) | In-process port over real `orderService` — lets contract test run http path w/o a server. |
 | [orderService.ts](../packages/api/orderService.ts) | Authoritative engine: transitions + tenant enforcement + repo-injected (`memoryOrderRepo`). |
 | [auth.ts](../packages/api/auth.ts) | Pure `AuthContext`, `FORBIDDEN_TENANT_ACCESS`, `requireOwned`. No crypto (RN-safe). |
+| [authSession.ts](../packages/api/authSession.ts) | Build 18: pure credential/session engine `makeAuthService` (injected `AuthRepo`+`AuthCrypto`) + `memoryAuthRepo`. Register/login/refresh(rotate)/logout. No crypto (RN-safe). |
 | [bookingStore.ts](../packages/api/bookingStore.ts) | PRIVATE mock store (AsyncStorage-durable). NOT exported from barrel. Don't import in UI. |
 | [index.ts](../packages/api/index.ts) | Barrel. Exports contract/gateway/auth/service/fake — NOT the store. |
 
@@ -51,14 +52,16 @@ Full diagram: [PROJECT_STATE.md §2](PROJECT_STATE.md).
 | File | Purpose |
 |---|---|
 | [src/index.ts](../server/src/index.ts) | Bootstrap: pool, schema, service, auth hook, 403 map, `/dev/token`, listen. |
-| [src/auth.ts](../server/src/auth.ts) | HMAC sign/verify (node:crypto, timing-safe) + `authenticateRequest` preHandler. |
-| [src/routes.ts](../server/src/routes.ts) | REST ops + SSE `/orders/stream`, all pass `req.auth` to the service. |
+| [src/auth.ts](../server/src/auth.ts) | HMAC sign/verify (node:crypto, timing-safe) + `authenticateRequest` preHandler (Bearer/`?token=`/dev). |
+| [src/authCrypto.ts](../server/src/authCrypto.ts) | Build 18: real `AuthCrypto` — scrypt password hash/verify, HMAC access-token mint, random+sha256 refresh tokens. |
+| [src/routes.ts](../server/src/routes.ts) | REST ops + SSE `/orders/stream` + `/auth/*` issuer routes; order routes pass `req.auth` to the service. |
 | [src/pgRepo.ts](../server/src/pgRepo.ts) | Postgres `OrderRepo`, every query tenant-scoped, update pinned by tenant. |
+| [src/pgAuthRepo.ts](../server/src/pgAuthRepo.ts) | Build 18: Postgres `AuthRepo` — users + revocable refresh sessions (email/refresh-hash UNIQUE). |
 | [src/db.ts](../server/src/db.ts) | Tuned pg Pool (max/timeouts/statement_timeout) + `initSchema`→migration runner. |
 | [src/migrate.ts](../server/src/migrate.ts) | Versioned migrations: `schema_migrations` table + `pg_advisory_lock` (concurrent-safe, exactly-once). |
 | [src/app.ts](../server/src/app.ts) | `buildApp` — repo-injected Fastify (hooks, auth, metrics, trustProxy). Same construction prod + tests use. |
 | [src/metrics.ts](../server/src/metrics.ts) | Server metric set over the pure registry → `serviceTelemetry`. |
-| [.env.example](../server/.env.example) | DATABASE_URL, PORT, AUTH_SECRET, AUTH_DEV_MODE. |
+| [.env.example](../server/.env.example) | DATABASE_URL, PORT, AUTH_SECRET, AUTH_DEV_MODE, AUTH_ACCESS/REFRESH_TTL_SEC. |
 
 ### Domain (packages/domain — pure business rules, 32 modules)
 Key ones: [catalog.ts](../packages/domain/catalog.ts) (services+details) ·
@@ -94,6 +97,7 @@ Key ones: [catalog.ts](../packages/domain/catalog.ts) (services+details) ·
 - [packages/api/gateway.test.ts](../packages/api/gateway.test.ts) — lifecycle on BOTH adapters + idempotency + change-feed.
 - [packages/api/orderService.test.ts](../packages/api/orderService.test.ts) — tenant isolation + auth propagation.
 - [packages/api/bookingStore.test.ts](../packages/api/bookingStore.test.ts) — persistence round-trip.
+- [packages/api/authSession.test.ts](../packages/api/authSession.test.ts) — Build 18: register/login/refresh-rotation/reuse-detection/expiry/logout, enumeration-safe (fake crypto). Real scrypt/HMAC proven in `server/test/{live,pg}`.
 - Domain: one `*.test.ts` per area under `packages/domain`.
 - Current count: run `npm run check` (the gate prints `N files · M assertions · 0 failed`). Infra harnesses (`test:pg|ops|live|repro`) are separate and not in the gate.
 
@@ -113,7 +117,9 @@ integrity, security, observability (see [engineering/](engineering/data_integrit
 tuned pool, non-root, versioned migrations, npm ci). **13** load/perf + SSE-crash fix.
 **14** ops readiness (graceful shutdown, rolling deploy, backup/restore). **15–16**
 independent-review defect fixes (metrics DoS, rate-limiter, SSE leak, shutdown parsing).
-**17** idempotent create. Every "verified" build surfaced ≥1 real defect only reachable
+**17** idempotent create. **18** production auth foundation (`/auth/*` issuer:
+scrypt + access/refresh + rotation/reuse-detection; migration v5 users+sessions;
+contract unchanged). Every "verified" build surfaced ≥1 real defect only reachable
 by executing the real path — details + measured evidence in [BUILD_HISTORY.md](BUILD_HISTORY.md).
 
 ## Hard rules (do not violate)

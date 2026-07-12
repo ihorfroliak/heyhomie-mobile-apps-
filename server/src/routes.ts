@@ -1,7 +1,42 @@
 /** REST + SSE routes. 1:1 with the OrderGateway HTTP port. Tenant-enforced. */
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { toContractOrder, validateSubmitOrderInput, NotFoundError, IdempotencyStore, type OrderService, type ServerOrder, type SubmitOrderResult } from '@heyhomie/api';
+import { toContractOrder, validateSubmitOrderInput, NotFoundError, IdempotencyStore, ValidationError, type AuthService, type OrderService, type ServerOrder, type SubmitOrderResult } from '@heyhomie/api';
 import { reqAuth } from './auth.js';
+
+/**
+ * Auth endpoints (Build 18) — PUBLIC (pre-auth), rate-limited by the onRequest
+ * hook. Replace the dev-only `/dev/token` as the real issuer: register/login mint
+ * an access + refresh pair; refresh rotates (single-use); logout revokes. The
+ * service returns canonical AppErrors (401 generic → no enumeration).
+ */
+export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): void {
+    const body = (b: unknown): Record<string, unknown> => {
+        if (!b || typeof b !== 'object') throw new ValidationError('invalid request body');
+        return b as Record<string, unknown>;
+    };
+    // Client-safe wire shape: the access token is opaque to the UI and the tenant
+    // stays server-side (hard rule) — never echo identity/tenantId in the body.
+    const wire = (t: { accessToken: string; refreshToken: string; expiresIn: number }) =>
+        ({ accessToken: t.accessToken, refreshToken: t.refreshToken, expiresIn: t.expiresIn });
+    app.post('/auth/register', async (req, reply) => {
+        const b = body(req.body);
+        const tokens = await auth.register({ email: b.email as string, password: b.password as string });
+        return reply.code(201).send(wire(tokens));
+    });
+    app.post('/auth/login', async (req) => {
+        const b = body(req.body);
+        return wire(await auth.login({ email: b.email as string, password: b.password as string }));
+    });
+    app.post('/auth/refresh', async (req) => {
+        const b = body(req.body);
+        return wire(await auth.refresh(b.refreshToken as string));
+    });
+    app.post('/auth/logout', async (req, reply) => {
+        const b = body(req.body);
+        await auth.logout(b.refreshToken as string);
+        return reply.code(204).send();
+    });
+}
 
 export function registerRoutes(app: FastifyInstance, service: OrderService, idem?: IdempotencyStore<SubmitOrderResult>): void {
     // create — body validated at the boundary (hostile input → 400). If the client
