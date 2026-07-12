@@ -1,6 +1,6 @@
 # Production Status
 
-As of commit `a777d78`. Gate: **31 files · 628 assertions · 0 failed · typecheck 0 · 56 app files 0 problems**.
+As of Build 17 (see [BUILD_HISTORY.md](BUILD_HISTORY.md) for commits). Gate: **32 files · 638 assertions · 0 failed · typecheck 0 · 56 app files 0 problems**.
 
 ## Readiness (evidence-based, not aspirational)
 | Category | Score | Basis |

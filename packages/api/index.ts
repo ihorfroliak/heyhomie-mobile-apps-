@@ -15,6 +15,7 @@ export * from './auth'; // AuthContext, tenant guard, token-claims validation (p
 export * from './orderValidation'; // boundary input validation
 export * from './rateLimiter'; // in-memory token-bucket limiter
 export * from './metrics'; // pure Prometheus registry (Counter/Gauge/Histogram)
+export * from './idempotency'; // create-dedup store + content-hash key (Build 17)
 export * from './serverConfig'; // fail-fast env validation (server boot)
 export * from './orderContract'; // frozen types (Order, OrderGateway, Submit* ...)
 export * from './orderGateway'; // Local adapter + active `orderGateway` binding

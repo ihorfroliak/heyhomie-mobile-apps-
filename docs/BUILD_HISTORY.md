@@ -6,6 +6,7 @@ inlining it.
 
 | Commit | Build | Shipped | Defects found+fixed (by execution) |
 |---|---|---|---|
+| _(this)_ | 17 — idempotent create | content-hash `Idempotency-Key` (port auto-sends) + server TTL dedup by (tenant,key) → no duplicate booking on retry/double-tap; no contract change | — (feature; gate 638, live 28/28) |
 | `a777d78` | 16 — validate external review | Reproduced 10 review findings first (`test:repro`), fixed the real ones | C1 SSE disconnect-mid-send leak (cleanup before await); C2 SHUTDOWN_DRAIN_MS→0 (strict parse, fail-fast); C3 double-SIGTERM→exit1 (guard); C4 clock-rollback 429 (clamp); C5 idle-evict full-burst (effective idle window); C7 O(n) sweep/req (throttled). C6/C8/C9 verified by-design |
 | `45428db` | deps hygiene | removed unused `@heyhomie/domain` from server; declared `@heyhomie/analytics` client dep (was hoisting-only) | — |
 | `d30556b` | 15 — independent audit | fresh-eyes review | metrics label cardinality DoS (unmatched routes); active_requests negative drift (stamp+guard); rate-limiter drained-bucket leak (idle-only evict) |

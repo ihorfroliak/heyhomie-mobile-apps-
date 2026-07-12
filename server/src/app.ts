@@ -6,8 +6,8 @@
  */
 import Fastify, { type FastifyInstance } from 'fastify';
 import {
-    makeOrderService, fromUnknown, AppError, RateLimiter, RateLimitedError,
-    type AuthContext, type Role, type OrderRepo, type ServerConfig,
+    makeOrderService, fromUnknown, AppError, RateLimiter, RateLimitedError, IdempotencyStore,
+    type AuthContext, type Role, type OrderRepo, type ServerConfig, type SubmitOrderResult,
 } from '@heyhomie/api';
 import { registerRoutes, registerStream } from './routes.js';
 import { authenticateRequest, signAuthToken } from './auth.js';
@@ -159,7 +159,9 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
     });
 
     app.addHook('preHandler', authenticateRequest(config.authSecret, config.devMode));
-    registerRoutes(app, service);
+    // Create-dedup store (Build 17): 10-min TTL, tenant-scoped by the route.
+    const idem = new IdempotencyStore<SubmitOrderResult>();
+    registerRoutes(app, service, idem);
     registerStream(app, service, metrics, sseSockets);
 
     return { app, metrics, beginShutdown: () => { shuttingDown = true; } };

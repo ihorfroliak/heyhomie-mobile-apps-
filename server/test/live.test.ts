@@ -151,6 +151,19 @@ async function main() {
     const nf = await fetch(`${base}/orders/does-not-exist`, { headers: authHdr });
     eq('missing order → 404 canonical', [nf.status, ((await nf.json()) as { code: string }).code], [404, 'NOT_FOUND']);
 
+    // Build 17: idempotent create — same Idempotency-Key → one order (no dup on retry)
+    const idemBody = JSON.stringify({ contact: { phone: '600999888' }, cityId: 'krakow', serviceId: 'standard_cleaning' });
+    const createWithKey = async (k: string) => (await (await fetch(`${base}/orders`, { method: 'POST', headers: { ...authHdr, 'idempotency-key': k }, body: idemBody })).json()) as { draft: { id: string } };
+    const k1a = await createWithKey('live-idem-1');
+    const k1b = await createWithKey('live-idem-1'); // retry, same key + body
+    eq('same Idempotency-Key returns the SAME order (deduped)', k1a.draft.id, k1b.draft.id);
+    const k2 = await createWithKey('live-idem-2'); // different key → new order
+    ok('different Idempotency-Key creates a new order', k2.draft.id !== k1a.draft.id);
+    // the real gateway auto-derives + sends a content-hash key: two identical submits dedup
+    const g1 = await clientA.submitOrder({ contact: { phone: '600777666' }, cityId: 'krakow', serviceId: 'standard_cleaning' });
+    const g2 = await clientA.submitOrder({ contact: { phone: '600777666' }, cityId: 'krakow', serviceId: 'standard_cleaning' });
+    eq('gateway auto-key dedups identical submits', g1.draft.id, g2.draft.id);
+
     // ── PHASE 5 (partial): graceful shutdown with OPEN SSE connections ──
     const tClose = Date.now();
     await app.close();

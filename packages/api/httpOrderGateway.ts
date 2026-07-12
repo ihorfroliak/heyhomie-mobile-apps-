@@ -10,6 +10,7 @@
  */
 import type { Order, OrderGateway, SubmitOrderInput, SubmitOrderResult } from './orderContract';
 import { HttpStatusError, RetryBudget, backoffDelay, dedupe, withRetry, withTimeout } from './httpResilience';
+import { idempotencyKeyFor } from './idempotency';
 
 export interface OrderBackendPort {
     /** Subscribe to full-snapshot updates; emits the initial snapshot on connect. */
@@ -124,23 +125,24 @@ export function httpOrderPort(config: HttpPortConfig): OrderBackendPort {
     // server logs group all attempts of one operation under one id.
     const newCorrelationId = () => `c-${Date.now().toString(36)}-${(++corrSeq).toString(36)}`;
 
-    const authHeaders = (correlationId: string): Record<string, string> => {
+    const authHeaders = (correlationId: string, extra?: Record<string, string>): Record<string, string> => {
         const t = config.getToken();
         return {
             'content-type': 'application/json',
             'x-correlation-id': correlationId,
             ...(t ? { authorization: `Bearer ${t}` } : {}),
+            ...extra,
         };
     };
-    const rawPost = (path: string, body: unknown, signal: AbortSignal, correlationId: string) =>
-        doFetch(`${base}${path}`, { method: 'POST', headers: authHeaders(correlationId), body: body !== undefined ? JSON.stringify(body) : undefined, signal }).then(res => {
+    const rawPost = (path: string, body: unknown, signal: AbortSignal, correlationId: string, extra?: Record<string, string>) =>
+        doFetch(`${base}${path}`, { method: 'POST', headers: authHeaders(correlationId, extra), body: body !== undefined ? JSON.stringify(body) : undefined, signal }).then(res => {
             if (!res.ok) throw new HttpStatusError(res.status, `POST ${path} → ${res.status}`);
             return res;
         });
 
-    const once = async (path: string, body?: unknown, correlationId: string = newCorrelationId()) => {
+    const once = async (path: string, body?: unknown, correlationId: string = newCorrelationId(), extra?: Record<string, string>) => {
         try {
-            return await withTimeout(signal => rawPost(path, body, signal, correlationId), timeoutMs);
+            return await withTimeout(signal => rawPost(path, body, signal, correlationId, extra), timeoutMs);
         } catch (e) {
             if (e instanceof Error && e.message.includes('timeout')) tel('timeout');
             throw e;
@@ -203,8 +205,10 @@ export function httpOrderPort(config: HttpPortConfig): OrderBackendPort {
             open();
             return () => { closed = true; stopTimers(); try { es?.close(); } catch { /* ignore */ } es = null; };
         },
-        // create is NOT idempotent → timeout only, never auto-retried (avoids dup orders).
-        submit: async (input) => (await once('/orders', input)).json() as Promise<SubmitOrderResult>,
+        // create is NOT auto-retried (avoids dup orders), but carries a content-hash
+        // Idempotency-Key so a client/user retry of the SAME booking is deduped
+        // server-side into one order (Build 17).
+        submit: async (input) => (await once('/orders', input, newCorrelationId(), { 'idempotency-key': idempotencyKeyFor(input) })).json() as Promise<SubmitOrderResult>,
         confirm: async (id) => { await idempotent(`/orders/${id}/confirm`, `confirm:${id}`); },
         cancel: async (id) => { await idempotent(`/orders/${id}/cancel`, `cancel:${id}`); },
         complete: async (id, completedAt) => { await idempotent(`/orders/${id}/complete`, `complete:${id}`, { completedAt }); },

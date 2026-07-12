@@ -1,11 +1,26 @@
 /** REST + SSE routes. 1:1 with the OrderGateway HTTP port. Tenant-enforced. */
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { toContractOrder, validateSubmitOrderInput, NotFoundError, type OrderService, type ServerOrder } from '@heyhomie/api';
+import { toContractOrder, validateSubmitOrderInput, NotFoundError, IdempotencyStore, type OrderService, type ServerOrder, type SubmitOrderResult } from '@heyhomie/api';
 import { reqAuth } from './auth.js';
 
-export function registerRoutes(app: FastifyInstance, service: OrderService): void {
-    // create — body is validated at the boundary (hostile input rejected → 400)
-    app.post('/orders', async (req) => service.create(validateSubmitOrderInput(req.body), reqAuth(req)));
+export function registerRoutes(app: FastifyInstance, service: OrderService, idem?: IdempotencyStore<SubmitOrderResult>): void {
+    // create — body validated at the boundary (hostile input → 400). If the client
+    // sent an Idempotency-Key, a repeat of the SAME booking (timeout-retry / double
+    // tap) returns the cached order instead of creating a second one (Build 17).
+    app.post('/orders', async (req) => {
+        const auth = reqAuth(req);
+        const input = validateSubmitOrderInput(req.body); // validate BEFORE dedup (never cache a bad body)
+        const key = req.headers['idempotency-key'];
+        if (idem && typeof key === 'string' && key) {
+            const scoped = `${auth.tenantId}:${key}`; // tenant-scoped — no cross-tenant collision
+            const cached = idem.get(scoped);
+            if (cached) return cached;
+            const result = await service.create(input, auth);
+            idem.set(scoped, result);
+            return result;
+        }
+        return service.create(input, auth);
+    });
 
     // list / get (tenant-scoped)
     app.get('/orders', async (req) => (await service.list(reqAuth(req))).map(toContractOrder));

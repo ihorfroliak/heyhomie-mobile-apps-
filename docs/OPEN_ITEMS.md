@@ -7,9 +7,10 @@ future code change, an intentional trade-off, or external infra.
 1. **Pagination on `GET /orders` + SSE delta frames** — the measured scale ceiling
    (Build 13: list p50 1151ms @conc50 vs 2ms DB; SSE ~7MB/client at 5.5k orders).
    Both change the `Order[]`-snapshot contract → require an `OrderGateway` version bump.
-2. **Idempotency-Key on `create`** — the only non-idempotent op; a human retry after
-   a timeout can duplicate a booking. Gateway never auto-retries create, so risk is
-   low, but add a key before real payments go live.
+2. ~~**Idempotency-Key on `create`**~~ — **DONE (Build 17).** Port auto-derives a
+   content-hash `Idempotency-Key`; server dedups create by `(tenantId, key)` in a
+   10-min TTL store → identical retry/double-tap returns the same order. Additive,
+   no contract change. (`packages/api/idempotency.ts`, `server/src/routes.ts`.)
 3. **Real payment/notification transport** — `notifyClient` is a console mock; Stripe
    + Fakturownia + email/SMS adapters are seams (`accountingClient`/`marketingClient`
    are mock/legacy). Wire when credentials exist.
