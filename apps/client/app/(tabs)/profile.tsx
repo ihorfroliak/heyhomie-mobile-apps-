@@ -5,15 +5,18 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography } from '@heyhomie/design';
 import { Card, useLocale, useSetLocale } from '@heyhomie/ui';
+import { auth } from '@heyhomie/api';
 import type { Locale } from '@heyhomie/domain';
 
+const API_URL = process.env.EXPO_PUBLIC_ORDERS_API_URL;
+
 type IconName = keyof typeof Ionicons.glyphMap;
-const items: { label: string; icon: IconName; route?: string; danger?: boolean }[] = [
+const items: { label: string; icon: IconName; route?: string; danger?: boolean; action?: 'logout' }[] = [
     { label: 'Addresses', icon: 'location-outline' },
     { label: 'Payment methods', icon: 'card-outline' },
     { label: 'Legal', icon: 'document-text-outline', route: '/legal' },
     { label: 'Privacy & data', icon: 'shield-checkmark-outline', route: '/privacy-data' },
-    { label: 'Log out', icon: 'log-out-outline', danger: true },
+    { label: 'Log out', icon: 'log-out-outline', danger: true, action: 'logout' },
 ];
 const languages: { key: Locale; label: string }[] = [
     { key: 'pl', label: 'Polski' },
@@ -48,7 +51,19 @@ export default function Profile() {
                 </View>
 
                 {items.map(it => (
-                    <Pressable key={it.label} onPress={() => it.route && router.push(it.route)} style={styles.rowWrap}>
+                    <Pressable
+                        key={it.label}
+                        onPress={async () => {
+                            if (it.action === 'logout') {
+                                // Full sign-out: revoke server-side + wipe tokens, then gate to login.
+                                if (API_URL) { await auth.logout(); }
+                                router.replace('/login');
+                            } else if (it.route) {
+                                router.push(it.route);
+                            }
+                        }}
+                        style={styles.rowWrap}
+                    >
                         <View style={styles.rowLeft}>
                             <Ionicons name={it.icon} size={18} color={it.danger ? colors.danger : colors.blue} />
                             <Text style={[styles.row, it.danger && { color: colors.danger }]}>{it.label}</Text>

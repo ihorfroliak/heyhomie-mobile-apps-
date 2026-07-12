@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { LocaleProvider } from '@heyhomie/ui';
@@ -10,16 +10,22 @@ import { kv, secureStore } from '../lib/store';
 const API_URL = process.env.EXPO_PUBLIC_ORDERS_API_URL;
 
 export default function RootLayout() {
-    // Startup: when wired to a backend, configure client auth + refresh a live
-    // session before the gateway connects. Offline build: no-op + Local adapter.
+    const router = useRouter();
+    // Startup: configure auth + refresh a live session before the gateway connects;
+    // gate to /login when there is no valid session. Offline build: no-op + Local adapter.
     useEffect(() => {
+        let mounted = true;
         void (async () => {
             if (API_URL) {
                 configureAuth({ baseUrl: API_URL, store: secureStore });
-                await auth.bootstrap();
+                const authed = await auth.bootstrap();
+                await orderGateway.init(kv);
+                if (mounted && !authed) router.replace('/login');
+            } else {
+                await orderGateway.init(kv);
             }
-            await orderGateway.init(kv);
         })();
+        return () => { mounted = false; };
     }, []);
 
     return (

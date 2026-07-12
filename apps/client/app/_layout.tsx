@@ -13,29 +13,26 @@ const API_URL = process.env.EXPO_PUBLIC_ORDERS_API_URL;
 export default function RootLayout() {
     const router = useRouter();
 
-    // Startup: when wired to a backend, configure client auth and refresh a live
-    // session from the stored refresh token BEFORE the gateway connects (SSE needs
-    // a token). Offline build: this is a no-op and the Local adapter hydrates.
+    // Startup: configure client auth + refresh a live session from the stored
+    // refresh token BEFORE the gateway connects (SSE needs a token). If there's no
+    // valid session, gate to /login (protected routes are unreachable without one).
+    // Offline build (no API_URL): no auth, Local adapter hydrates, consent gate only.
     useEffect(() => {
+        let mounted = true;
         void (async () => {
             if (API_URL) {
                 configureAuth({ baseUrl: API_URL, store: secureStore });
-                await auth.bootstrap();
+                const authed = await auth.bootstrap();
+                await orderGateway.init(asyncStore);
+                if (mounted && !authed) { router.replace('/login'); return; } // unauthenticated → login, skip consent
+            } else {
+                await orderGateway.init(asyncStore);
             }
-            await orderGateway.init(asyncStore);
+            // Authenticated (or offline): first-run consent gate.
+            const consentDone = await consents.isComplete();
+            if (mounted && !consentDone) router.replace('/consent');
         })();
-    }, []);
-
-    // First-run gate: if the required consents aren't recorded yet, send the user
-    // to the consent screen before anything else.
-    useEffect(() => {
-        let mounted = true;
-        consents.isComplete().then(done => {
-            if (mounted && !done) router.replace('/consent');
-        });
-        return () => {
-            mounted = false;
-        };
+        return () => { mounted = false; };
     }, []);
 
     return (

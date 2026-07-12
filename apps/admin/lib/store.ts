@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ExpoSecureStore from 'expo-secure-store';
 import { expensesStore, type KeyValueStore, type SecureStore } from '@heyhomie/api';
 
 export const kv: KeyValueStore = {
@@ -8,13 +9,13 @@ export const kv: KeyValueStore = {
 };
 
 /**
- * SecureStore for auth tokens (Build 20). INTERIM: AsyncStorage is NOT encrypted
- * — swap for expo-secure-store before production. See docs/OPEN_ITEMS.md.
+ * SecureStore for auth tokens (Build 21) — expo-secure-store (Keychain/Keystore),
+ * encrypted at rest. Same interface as before; nothing above this file changed.
  */
 export const secureStore: SecureStore = {
-    getItem: key => AsyncStorage.getItem(key),
-    setItem: (key, value) => AsyncStorage.setItem(key, value),
-    deleteItem: key => AsyncStorage.removeItem(key),
+    getItem: key => ExpoSecureStore.getItemAsync(key),
+    setItem: (key, value) => ExpoSecureStore.setItemAsync(key, value),
+    deleteItem: key => ExpoSecureStore.deleteItemAsync(key),
 };
 
 /** Persisted monthly expenses history for the finance screen. */

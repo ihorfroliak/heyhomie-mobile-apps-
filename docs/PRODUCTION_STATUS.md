@@ -8,13 +8,13 @@ Latest build → [BUILD_HISTORY.md](BUILD_HISTORY.md). Gate (`npm run check`): a
 | Production | ~82 | full stack runs correctly on real docker+pg; external infra pending |
 | Reliability | 89 | CAS exactly-once, restart recovery, SSE-leak + shutdown re-entrancy fixed |
 | Correctness/Concurrency | 84 | 100-parallel exactly-once (real pg), property tests, terminal invariants + DB CHECK |
-| Security | 85 | credential auth issuer (scrypt, access+refresh, single-use rotation w/ reuse-detection, enumeration-safe), HMAC token exp+skew, tenant isolation (service+repo+CHECK), rate-limit hardened, redaction, no SQL/JSON injection (parameterized) |
+| Security | 87 | credential auth issuer (scrypt, access+refresh, single-use rotation w/ reuse-detection, enumeration-safe), **encrypted mobile token storage (expo-secure-store) + route gate** (Build 21), HMAC token exp+skew, tenant isolation (service+repo+CHECK; apps never see role/tenant), rate-limit hardened, redaction, no SQL/JSON injection (parameterized) |
 | Observability | 78 | Prometheus `/metrics`, correlation ids end-to-end, structured logs, incident playbook |
 | Operations | 81 | k8s graceful shutdown, rolling deploy, backup/restore, health probes — all measured |
 | Deployment | 85 | docker build + compose healthy + restart verified; non-root, reproducible build |
 | Infrastructure | 78 | containerized stack proven; single-instance (multi-instance needs shared state) |
 | Maintainability | 87 | clean layering, anti-dep guard, frozen contract, docs; server typecheck now clean + gated (Build 19) |
-| Testability | 94 | 681 gated assertions + live/e2e/pg/ops/load/repro harnesses; CI runs the strongest suites — `test:pg`+`test:ops` (real pg), `test:live`, `test:e2e` (full app journey vs real server), `typecheck:server`; one-command `verify:full` |
+| Testability | 94 | 684 gated assertions + live/e2e/pg/ops/load/repro harnesses; CI runs the strongest suites — `test:pg`+`test:ops` (real pg), `test:live`, `test:e2e` (full app journey incl. fresh-start rejection), `typecheck:server`; one-command `verify:full`. Mobile UI not machine-run (no Expo runtime) — auth logic proven via e2e + session/authClient gate tests |
 | Scalability | ~50 | DB indexed/efficient; SSE full-snapshot + unpaginated list are the ceilings |
 
 ## Performance baseline (Build 13, measured on real Postgres via `test:load`)
@@ -37,7 +37,7 @@ clients ≈7MB/client, broadcast ≈6.8s at 5.5k orders (the full-snapshot scale
 Bottlenecks = unpaginated list + full-snapshot SSE (both contract-versioned work — see [OPEN_ITEMS.md](OPEN_ITEMS.md)).
 
 ## CODE COMPLETE (verified in-repo)
-Domain rules, OrderGateway contract + both adapters, authoritative `orderService` (CAS, tenant), auth+HMAC + **credential issuer** (`/auth/*`: scrypt, access+refresh, rotation/reuse-detection — Build 18), **client integration** (env-selected gateway + `authClient` refresh/logout/bootstrap — Build 20), Fastify server (routes/SSE/metrics/migrations/graceful-shutdown), Docker image + compose. Proven on real Postgres 16 + real HTTP + real docker signals + a real end-to-end app journey (`test:e2e`).
+Domain rules, OrderGateway contract + both adapters, authoritative `orderService` (CAS, tenant), auth+HMAC + **credential issuer** (`/auth/*`: scrypt, access+refresh, rotation/reuse-detection — Build 18), **client integration** (env-selected gateway + `authClient` — Build 20), **mobile auth UX** (login/register/logout + route gate + expo-secure-store — Build 21), Fastify server (routes/SSE/metrics/migrations/graceful-shutdown), Docker image + compose. Proven on real Postgres 16 + real HTTP + real docker signals + a real end-to-end app journey (`test:e2e`).
 
 ## INFRASTRUCTURE PENDING (external — not repo defects)
 - TLS / DNS / hosting; reverse proxy + `TRUST_PROXY=1` (real client IP); managed Postgres.

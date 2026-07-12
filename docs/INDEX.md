@@ -80,7 +80,9 @@ Key ones: [catalog.ts](../packages/domain/catalog.ts) (services+details) ·
 | [client/app/(tabs)/activity.tsx](../apps/client/app/(tabs)/activity.tsx) | Orders list + live payment status via gateway snapshot. |
 | [admin/app/pipeline.tsx](../apps/admin/app/pipeline.tsx) | Funnel + Live bookings + payment status + Mark-paid. |
 | [admin/app/pay.tsx](../apps/admin/app/pay.tsx) | Payouts (rates by worker type, overrides, bonus). |
-| `client/app/_layout.tsx`, `admin/app/_layout.tsx` | `orderGateway.init(kv)` at startup. |
+| `client/app/_layout.tsx`, `admin/app/_layout.tsx` | Startup: `configureAuth` + `auth.bootstrap` + `orderGateway.init`; **route gate** → `/login` if unauthenticated (Build 21). |
+| `client/app/login.tsx`+`register.tsx`, `admin/app/login.tsx` | Build 21 auth screens (shared `auth` client); logout wired in `client/app/(tabs)/profile.tsx`. |
+| `client/lib/store.ts`, `admin/lib/store.ts` | `secureStore` = **expo-secure-store** (encrypted tokens) behind the `SecureStore` interface (Build 21). |
 
 ### UI kit / design
 [packages/ui/src](../packages/ui/src) (Card, MissionCard, Segmented, Button…) ·
@@ -126,7 +128,9 @@ contract unchanged). **19** CI & production hardening (full pipeline in CI —
 `checks` + `postgres` jobs; server typecheck gated + fixed; `test:ops` asserts;
 `verify:full`). **20** end-to-end integration — `orderGateway` env-selects
 Local/HTTP; `authClient` (login/refresh/logout/bootstrap + refresh-on-401); app
-`_layout` bootstrap; `test:e2e` proves the journey vs a real server. Every
+`_layout` bootstrap; `test:e2e` proves the journey vs a real server. **21** mobile
+production readiness — login/register/logout screens + route gate; encrypted token
+storage (expo-secure-store); security review. Every
 "verified" build surfaced ≥1 real defect only reachable
 by executing the real path — details + measured evidence in [BUILD_HISTORY.md](BUILD_HISTORY.md).
 

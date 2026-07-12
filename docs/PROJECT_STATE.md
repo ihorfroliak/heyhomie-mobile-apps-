@@ -108,6 +108,9 @@ UI (apps/*)  ──imports only──►  orderGateway  (packages/api/orderContr
   + opaque **refresh token** (sha256-hashed at rest, single-use rotation, reuse → revoke family).
   Server: `authCrypto.ts` (node:crypto) + `pgAuthRepo.ts`; migration v5 (`users`+`auth_sessions`).
   Replaces dev-only `/dev/token` as the issuer. Contract + access-token format unchanged.
+- **Client auth (Build 20/21)**: `authClient.ts` (sync `getToken`, `authFetch` refresh-on-401,
+  login/register/refresh/logout/bootstrap); apps have login/register/logout screens + a route
+  gate; tokens live in **expo-secure-store** (Keychain/Keystore). Apps never see role/tenant.
 - DB: `orders.tenant_id` NOT NULL + indexed, pinned on update. `users` (email UNIQUE, scrypt)
   + `auth_sessions` (refresh_hash UNIQUE, expires_at, revoked_at) — Build 18.
 
@@ -147,13 +150,14 @@ auth+tenant logic, the Fastify server source, the pure order service.
 **Infrastructure pending (needs external, cannot run in-session — no node_modules/Docker/pg):**
 - Deploy the server + provision Postgres + real `AUTH_SECRET`.
 - ~~A login endpoint that mints the signed token (issuer).~~ **DONE — Build 18** (`/auth/*`).
-- ~~Flip the gateway binding + point at `EXPO_PUBLIC_ORDERS_API_URL`.~~ **DONE — Build 20**
-  (env selection + `authClient` + app bootstrap). Remaining app work: a login/register
-  *screen* (the wiring exists; only UI is missing), and swap the interim AsyncStorage
-  `secureStore` for expo-secure-store before production.
-- The client↔server path (auth + HTTP + SSE + refresh + logout) IS now exercised end-to-end
-  by `test:e2e` against a real Fastify server; `test:live`/`test:pg` cover server + persistence.
-  Production DEPLOY (real host/pg/secret) still unrun.
+- ~~Flip the gateway binding.~~ **DONE — Build 20.** ~~Login UI + secure token storage.~~
+  **DONE — Build 21**: client login/register + admin login screens, wired logout, a
+  route gate in `_layout` (unauthenticated → `/login`), and **expo-secure-store**
+  (encrypted tokens) behind the unchanged `SecureStore` interface. Worker app is still
+  offline (not backend-wired) — future.
+- The client↔server path (auth + HTTP + SSE + refresh + logout + fresh-start rejection)
+  IS exercised end-to-end by `test:e2e` against a real Fastify server; `test:live`/
+  `test:pg` cover server + persistence. Production DEPLOY (real host/pg/secret) still unrun.
 
 ## 7. Git
 

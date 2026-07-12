@@ -74,6 +74,10 @@ async function main() {
         timeoutMs: 4000,
     }));
 
+    // 0) FRESH APP STARTUP with no stored token → not authenticated, protected refused
+    ok('fresh start: bootstrap with no stored token → not authenticated', (await authClient.bootstrap()) === false && authClient.getToken() === undefined);
+    ok('fresh start: a protected read is 401 (no session)', (await authClient.authFetch(`${base}/orders`, {})).status === 401);
+
     // 1) REGISTER → receive tokens
     await authClient.register('owner@e2e.pl', 'Sup3rSecret!');
     const firstAccess = authClient.getToken();
