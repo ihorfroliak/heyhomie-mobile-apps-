@@ -3,8 +3,43 @@
 Durable handoff. Read this first in any new session to continue development
 without re-deriving context. Reflects the repository as-is (evidence, not plans).
 
-Last updated: end of Build 09 (production verification). For the running build
-log and file map see [INDEX.md](INDEX.md) — it is updated every build.
+Last updated: Build 16. Current commit `a777d78`, pushed to
+https://github.com/ihorfroliak/heyhomie-mobile-apps- .
+
+---
+
+## NEXT SESSION BOOTSTRAP (zero chat history → productive immediately)
+
+**Read order:** this file → [INDEX.md](INDEX.md) (file map) → [OPEN_ITEMS.md](OPEN_ITEMS.md)
+(what's left) → [PRODUCTION_STATUS.md](PRODUCTION_STATUS.md) (readiness) →
+[BUILD_HISTORY.md](BUILD_HISTORY.md) (why). Don't re-scan the tree; trust the maps.
+
+- **Where:** `C:\Users\ihorf\Downloads\heyhomie-apps`. Commit `a777d78` on `main`, clean, pushed.
+- **What it is:** npm-workspaces monorepo — 3 Expo apps + pure-TS packages + Fastify/Postgres `server/`. Cleaning marketplace, Polish market.
+- **The spine:** UI → frozen `OrderGateway` contract → Local adapter (active, offline) OR Http adapter → authoritative `orderService` (CAS, tenant) → repo (memory | pg). See [INDEX.md §Architecture].
+- **Readiness:** ~82% for a single-instance pilot. Remaining work is external infra + a contract-versioned pagination/delta for scale — NOT in-repo code blockers.
+
+**Commands (validation order):**
+1. `npm run check` — THE gate (tests + typecheck + anti-dep guard). Green = 628 assertions.
+2. `npm run typecheck` (subset of #1), `npm run check:apps` (RN guard).
+3. Single test: `npx -y tsx packages/api/orderService.test.ts`.
+4. Infra tests (need Docker/Postgres, NOT in the gate): `npm run test:pg | test:ops | test:live | test:repro`.
+5. Full stack: `docker compose up --build`.
+
+**Recurring pitfalls:**
+- Bash cwd resets each call → prepend `cd /c/Users/ihorf/Downloads/heyhomie-apps`.
+- RN screens can't typecheck here (no native node_modules) → `check:apps` is their guard.
+- Docker daemon (Docker Desktop) is intermittently down → pg/ops/docker tests may be blocked; pure logic still runs on the memory repo.
+- Windows LF→CRLF git warnings are benign.
+- **Execution finds bugs static review misses** — always run the real path (signals, concurrency, docker, live HTTP), never assume PASS.
+
+**Things explicitly NOT to change (locked decisions):**
+- The `OrderGateway` contract (`packages/api/orderContract.ts`) — frozen; any change = new build/version.
+- UI must import ONLY `orderGateway`, never the store (compile wall + `check-apps.mjs` guard).
+- `tenantId`/`auth` stay server-side — never in the contract `Order` or UI.
+- Dockerfile CMD must be `node --import tsx` (node PID 1 for SIGTERM drain).
+- `forceCloseConnections: true` + readiness-flip drain — the two together are load-bearing for graceful shutdown; don't touch one without the other ([INDEX] Build 14/16).
+- Auto commit+push after every successful build is the user's standing instruction.
 
 ---
 

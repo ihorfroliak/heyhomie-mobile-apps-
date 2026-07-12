@@ -10,10 +10,16 @@ tree. Trust the map; open only the 1–2 files a task needs.
 ---
 
 ## Quick nav
-- State / handoff → [docs/PROJECT_STATE.md](PROJECT_STATE.md)
+- **Next-session bootstrap / handoff** → [docs/PROJECT_STATE.md](PROJECT_STATE.md) (read first)
+- Readiness + deploy verdict → [docs/PRODUCTION_STATUS.md](PRODUCTION_STATUS.md)
+- What's left / trade-offs → [docs/OPEN_ITEMS.md](OPEN_ITEMS.md)
+- Compact build ledger → [docs/BUILD_HISTORY.md](BUILD_HISTORY.md) (detailed log at the bottom of THIS file)
+- Deep dives → [docs/engineering/](engineering/data_integrity.md) · [docs/security/](security/security_model.md) · [docs/observability/](observability/observability.md)
 - Backend run + auth → [server/README.md](../server/README.md)
 - Verify everything → `npm run check` (repo root)
 - Remote → https://github.com/ihorfroliak/heyhomie-mobile-apps-
+
+> Doc map: no separate PROJECT.md / KNOWLEDGE_BASE.md — this INDEX is the project map; the knowledge base is [engineering/](engineering/data_integrity.md) + [security/](security/security_model.md) + [observability/](observability/observability.md). Root `ARCHITECTURE.md`/`INTEGRATION.md` are pre-Build-04 legacy (bannered).
 
 ## Architecture (one line)
 UI → **`orderGateway`** (frozen contract) → Local adapter (offline) **or** Http

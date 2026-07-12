@@ -1,3 +1,5 @@
+> ⚠️ **SUPERSEDED (pre-Build-04 legacy).** Describes the original "plug into external Rails + Go backends" vision. The project now ships its OWN Fastify + Postgres backend (`server/`) behind the frozen OrderGateway contract. **Current source of truth: [docs/INDEX.md](docs/INDEX.md).** Kept for history only.
+
 # Integrating heyhomie-apps into the HeyHomie ecosystem
 
 These mobile apps are **not standalone** — they are part of the existing HeyHomie

@@ -1,3 +1,5 @@
+> ⚠️ **SUPERSEDED (pre-Build-04 legacy).** Describes the original "plug into external Rails + Go backends" vision. The project now ships its OWN Fastify + Postgres backend (`server/`) behind the frozen OrderGateway contract. **Current source of truth: [docs/INDEX.md](docs/INDEX.md).** Kept for history only.
+
 # Architecture — heyhomie-apps
 
 A React Native + Expo monorepo: three apps (client, worker, admin) on a shared,
