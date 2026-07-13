@@ -134,6 +134,24 @@ const MIGRATIONS: Migration[] = [
         name: 'user_disabled_at',
         sql: `ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at timestamptz;`,
     },
+    {
+        // Build 27 — privileged-action audit trail. Append-only accountability log
+        // for owner/self auth-lifecycle events (invite/revoke/join/disable/enable/
+        // delete/password-reset). Carries NO secrets. Additive; touches nothing else.
+        version: 9,
+        name: 'audit_log',
+        sql: `
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id             text PRIMARY KEY,
+                type           text        NOT NULL,
+                tenant_id      text        NOT NULL,
+                actor_user_id  text,
+                target_user_id text,
+                target_email   text,
+                created_at     timestamptz NOT NULL DEFAULT now()
+            );
+            CREATE INDEX IF NOT EXISTS audit_log_tenant_idx ON audit_log (tenant_id, created_at DESC);`,
+    },
 ];
 
 export async function runMigrations(pool: Pool): Promise<number[]> {

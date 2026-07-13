@@ -18,6 +18,7 @@
  */
 import type { AuthContext, Role } from './auth';
 import { ValidationError, UnauthorizedError, ConflictError, ForbiddenError } from './errors';
+import { nullAuditPort, type AuditPort, type AuditEvent, type AuditEventView } from './auditPort';
 
 /** A credential-holder. `passwordHash`/`passwordSalt` are opaque to this module
  *  (the injected AuthCrypto owns their format). A user owns exactly one tenant. */
@@ -185,6 +186,7 @@ export interface AuthServiceOptions {
     resetTtlSec?: number; // default 1 hour — how long a password-reset token is valid
     now?: () => number; // epoch ms (default Date.now) — injected for expiry tests
     minPasswordLength?: number; // default 8
+    audit?: AuditPort; // privileged-action accountability sink (default null) — Build 27
 }
 
 export interface RegisterInput { email: string; password: string; deviceLabel?: string }
@@ -249,6 +251,8 @@ export interface AuthService {
     /** Owner: permanently delete a member (not self, not the last owner) → revokes
      *  sessions + pending invitations, removes the account, preserves the tenant. */
     deleteUser(userId: string, auth: AuthContext): Promise<void>;
+    /** Owner/admin: the tenant's privileged-action audit trail (no secrets). */
+    listAuditEvents(auth: AuthContext, limit?: number): Promise<AuditEventView[]>;
 }
 
 /**
@@ -260,7 +264,13 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
     const minPw = opts.minPasswordLength ?? 8;
     const inviteTtlSec = opts.inviteTtlSec ?? 604_800; // 7 days
     const resetTtlSec = opts.resetTtlSec ?? 3_600; // 1 hour
+    const audit = opts.audit ?? nullAuditPort();
     const iso = (ms: number) => new Date(ms).toISOString();
+    // Best-effort + ISOLATED: an audit-sink failure must never fail (or roll back)
+    // the auth op. Events carry NO secrets (no token / hash / password).
+    const emit = async (e: Omit<AuditEvent, 'at'>): Promise<void> => {
+        try { await audit.record({ ...e, at: iso(now()) }); } catch { /* isolated */ }
+    };
     const deviceLabelOf = (raw: unknown): string | null =>
         typeof raw === 'string' && raw.trim() ? raw.trim().slice(0, 100) : null;
 
@@ -380,6 +390,7 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
                 revokedAt: null,
             };
             await repo.insertInvitation(inv);
+            await emit({ type: 'member.invited', tenantId: auth.tenantId, actorUserId: auth.userId, targetEmail: email });
             return { id: inv.id, inviteToken, email, role: input.role, expiresIn: inviteTtlSec };
         },
 
@@ -405,6 +416,7 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             };
             await repo.insertUser(user); // unique-email enforced (ConflictError on race)
             await repo.markInvitationAccepted(inv.id, iso(t)); // single-use
+            await emit({ type: 'member.joined', tenantId: inv.tenantId, actorUserId: null, targetUserId: user.id, targetEmail: inv.email });
             return issue({ userId: user.id, tenantId: user.tenantId, role: user.role }, deviceLabelOf(input.deviceLabel));
         },
 
@@ -414,7 +426,10 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             // Deny-by-default + tenant isolation: a cross-tenant id is treated as not-found.
             if (!inv || inv.tenantId !== auth.tenantId) throw new ForbiddenError('invitation not found');
             if (inv.acceptedAt) throw new ConflictError('cannot revoke an accepted invitation');
-            if (!inv.revokedAt) await repo.revokeInvitation(inv.id, iso(now()));
+            if (!inv.revokedAt) {
+                await repo.revokeInvitation(inv.id, iso(now()));
+                await emit({ type: 'invitation.revoked', tenantId: auth.tenantId, actorUserId: auth.userId, targetEmail: inv.email });
+            }
         },
 
         async listInvitations(auth) {
@@ -454,6 +469,8 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             await repo.markPasswordResetUsed(pr.id, iso(t)); // single-use
             // Force a fresh login everywhere: revoke every existing session.
             await repo.revokeAllUserSessions(pr.userId, iso(t), 'revoked');
+            const u = await repo.findUserById(pr.userId);
+            if (u) await emit({ type: 'password.reset', tenantId: u.tenantId, actorUserId: null, targetUserId: u.id, targetEmail: u.email });
         },
 
         async listSessions(auth) {
@@ -483,11 +500,13 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             await repo.setUserDisabled(target.id, iso(now()));
             // Kill access immediately: every live session is revoked.
             await repo.revokeAllUserSessions(target.id, iso(now()), 'revoked');
+            await emit({ type: 'member.disabled', tenantId: auth.tenantId, actorUserId: auth.userId, targetUserId: target.id, targetEmail: target.email });
         },
 
         async enableUser(userId, auth) {
             const target = await ownerTarget(userId, auth);
             await repo.setUserDisabled(target.id, null); // re-enable; user must log in fresh
+            await emit({ type: 'member.enabled', tenantId: auth.tenantId, actorUserId: auth.userId, targetUserId: target.id, targetEmail: target.email });
         },
 
         async deleteUser(userId, auth) {
@@ -500,6 +519,12 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             await repo.revokeAllUserSessions(target.id, at, 'revoked'); // sessions dead
             await repo.revokeInvitationsByInviter(target.id, at); // their pending invites dead
             await repo.deleteUserById(target.id); // account removed; tenant + others intact
+            await emit({ type: 'member.deleted', tenantId: auth.tenantId, actorUserId: auth.userId, targetUserId: target.id, targetEmail: target.email });
+        },
+
+        async listAuditEvents(auth, limit) {
+            if (auth.role !== 'owner' && auth.role !== 'admin') throw new ForbiddenError('insufficient role');
+            return audit.listByTenant(auth.tenantId, limit);
         },
     };
 

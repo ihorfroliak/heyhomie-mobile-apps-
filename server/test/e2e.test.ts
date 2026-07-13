@@ -13,7 +13,7 @@
  */
 import {
     createAuthClient, memorySecureStore, makeHttpOrderGateway, httpOrderPort,
-    memoryOrderRepo, memoryAuthRepo, loadServerConfig, type Order,
+    memoryOrderRepo, memoryAuthRepo, memoryAuditPort, loadServerConfig, type Order,
 } from '@heyhomie/api';
 import { buildApp } from '../src/app.js';
 import { makeAuthCrypto } from '../src/authCrypto.js';
@@ -67,7 +67,7 @@ async function main() {
         async sendInvitation(m: { email: string; inviteToken: string }) { sent.push({ type: 'invitation', email: m.email, token: m.inviteToken }); },
         async sendPasswordReset(m: { email: string; resetToken: string }) { sent.push({ type: 'password_reset', email: m.email, token: m.resetToken }); },
     };
-    const authDeps = { repo: memoryAuthRepo(), crypto: makeAuthCrypto(AUTH_SECRET, config.accessTtlSec), notifications: spyPort };
+    const authDeps = { repo: memoryAuthRepo(), crypto: makeAuthCrypto(AUTH_SECRET, config.accessTtlSec), notifications: spyPort, audit: memoryAuditPort() };
     const { app } = buildApp(config, memoryOrderRepo(), async () => { /* memory db up */ }, authDeps);
     await app.listen({ port: 0, host: '127.0.0.1' });
     const base = `http://127.0.0.1:${(app.server.address() as { port: number }).port}`;
@@ -248,6 +248,22 @@ async function main() {
         ok('password-reset request still 200 despite a failing port', resetStatus === 200);
         await app2.close();
     }
+
+    // ── Build 27: audit trail over HTTP (owner reads /auth/audit) ──
+    const auditEvents = await authClient.listAuditEvents();
+    ok('owner reads the tenant audit trail', auditEvents.length > 0);
+    const auditTypes = auditEvents.map(e => e.type);
+    ok('audit captured the disable + delete of the member', auditTypes.includes('member.disabled') && auditTypes.includes('member.deleted'));
+    ok('audit captured invites + an invitation revoke (owner tenant)', auditTypes.includes('member.invited') && auditTypes.includes('invitation.revoked'));
+    ok('audit trail is tenant-scoped (a different tenant\'s reset is NOT here)', !auditTypes.includes('password.reset'));
+    ok('audit trail NEVER contains a token', !JSON.stringify(auditEvents).includes(invite.inviteToken) && !JSON.stringify(auditEvents).includes(reqRes.resetToken));
+    // a non-privileged worker cannot read the audit trail (owner/admin only)
+    const probeInv = await authClient.invite('audit-probe@e2e.pl', 'worker');
+    const probe = createAuthClient({ baseUrl: base, store: memorySecureStore() });
+    await probe.acceptInvite(probeInv.inviteToken, 'ProbePass12');
+    let auditForbidden = false;
+    try { await probe.listAuditEvents(); } catch { auditForbidden = true; }
+    ok('a non-privileged worker cannot read the audit trail', auditForbidden);
 
     // 7) LOGOUT → tokens gone → requests rejected
     await authClient.logout();

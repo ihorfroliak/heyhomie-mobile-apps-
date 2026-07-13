@@ -84,6 +84,7 @@ the Http adapter satisfies the same lifecycle as Local via the in-process fake.
   | POST | `/auth/users/:id/disable` | **(auth: owner)** | `204` — disable a member (revokes all their sessions; login/refresh/reset blocked) |
   | POST | `/auth/users/:id/enable` | **(auth: owner)** | `204` — re-enable a disabled member |
   | DELETE | `/auth/users/:id` | **(auth: owner)** | `204` — delete a member (not self / last owner; revokes sessions+invites; cross-tenant → 403) |
+  | GET | `/auth/audit` | **(auth: owner/admin)** | `{events:[…]}` — tenant privileged-action trail (type/actor/target-email/at; NO secrets) — Build 27 |
 
   Passwords are scrypt-hashed (per-user salt). The **access token** is the same
   short-lived HMAC token as before (`AUTH_ACCESS_TTL_SEC`, default 15 min); the
@@ -111,6 +112,15 @@ export const orderGateway = makeHttpOrderGateway(httpOrderPort({
   getToken: () => session.token,   // opaque token from your auth; UI never sees a tenant
 }));
 ```
+
+## Audit trail (Build 27)
+
+Every privileged auth/account-lifecycle action (invite / revoke / join / disable / enable /
+delete / password-reset) emits one `AuditPort` event from `makeAuthService`, persisted to
+`audit_log` (migration v9) by `pgAuditPort`. Owner/admin read the tenant-scoped trail via
+`GET /auth/audit`. Emitting is **best-effort + isolated** (a sink failure never fails the auth
+op). Events carry **no secrets** — the table has no token/hash/password column (schema-enforced);
+the console sink masks the email. A SIEM/log-shipper is just another `AuditPort` impl.
 
 ## Notification delivery (Build 26)
 

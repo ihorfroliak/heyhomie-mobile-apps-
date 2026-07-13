@@ -25,7 +25,8 @@ const authB: AuthContext = { userId: 'b', tenantId: 'T2', role: 'member' };
 
 async function main() {
     const pool = makePool(PG_URL);
-    await pool.query('DROP TABLE IF EXISTS password_resets'); // clean slate (test db only)
+    await pool.query('DROP TABLE IF EXISTS audit_log'); // clean slate (test db only)
+    await pool.query('DROP TABLE IF EXISTS password_resets');
     await pool.query('DROP TABLE IF EXISTS invitations');
     await pool.query('DROP TABLE IF EXISTS auth_sessions');
     await pool.query('DROP TABLE IF EXISTS users');
@@ -39,10 +40,10 @@ async function main() {
     const tMig = Date.now();
     const [runX, runY] = await Promise.all([runMigrations(pool), runMigrations(pool)]);
     console.log(`  [perf] concurrent migration on empty db: ${Date.now() - tMig}ms`);
-    eq('exactly 8 migrations applied across both starts', runX.length + runY.length, 8);
-    ok('one instance migrated, the other waited (0)', (runX.length === 8 && runY.length === 0) || (runY.length === 8 && runX.length === 0));
+    eq('exactly 9 migrations applied across both starts', runX.length + runY.length, 9);
+    ok('one instance migrated, the other waited (0)', (runX.length === 9 && runY.length === 0) || (runY.length === 9 && runX.length === 0));
     const hist = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-    eq('migration history records each version once', hist.rows.map((r: { version: number }) => Number(r.version)), [1, 2, 3, 4, 5, 6, 7, 8]);
+    eq('migration history records each version once', hist.rows.map((r: { version: number }) => Number(r.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
     eq('re-running migrations is a no-op (idempotent)', (await runMigrations(pool)).length, 0);
     await initSchema(pool); // the callers' entrypoint — also idempotent
     const cols = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'orders'`);
@@ -293,6 +294,27 @@ async function main() {
             ok('invite delivery fired via the port over pg', sent.includes('invitation:notif-w@pg.pl'));
             ok('password-reset delivery fired via the port over pg', sent.includes('password_reset:notif@pg.pl'));
             await app.close(); await np.end();
+        }
+
+        // ── Build 27: audit trail persisted over real pg (HTTP + pgAuditPort) ──
+        {
+            const { pgAuditPort } = await import('../src/pgAuditPort.js');
+            const jsonH = { 'content-type': 'application/json' };
+            const cfg = loadServerConfig({ DATABASE_URL: PG_URL, AUTH_SECRET: 'pg-audit-secret-16chars', PORT: '8097', AUTH_DEV_MODE: '1' });
+            const ap = makePool(PG_URL);
+            const { app } = buildApp(cfg, pgOrderRepo(ap), async () => { await ap.query('SELECT 1'); }, { repo: pgAuthRepo(ap), crypto: makeAuthCrypto('pg-audit-secret-16chars', 900), audit: pgAuditPort(ap) });
+            await app.listen({ port: 0, host: '127.0.0.1' });
+            const ab = `http://127.0.0.1:${(app.server.address() as { port: number }).port}`;
+            const reg = await (await fetch(`${ab}/auth/register`, { method: 'POST', headers: jsonH, body: JSON.stringify({ email: 'audit@pg.pl', password: 'AuditOwner1!' }) })).json() as { accessToken: string };
+            const H = { ...jsonH, authorization: `Bearer ${reg.accessToken}` };
+            await fetch(`${ab}/auth/invite`, { method: 'POST', headers: H, body: JSON.stringify({ email: 'audit-w@pg.pl', role: 'worker' }) });
+            const rows = await ap.query(`SELECT type, target_email FROM audit_log WHERE tenant_id = (SELECT tenant_id FROM users WHERE email='audit@pg.pl')`);
+            ok('invite audit persisted to audit_log over pg', rows.rows.some((r: { type: string; target_email: string }) => r.type === 'member.invited' && r.target_email === 'audit-w@pg.pl'));
+            const cols = await ap.query(`SELECT column_name FROM information_schema.columns WHERE table_name='audit_log'`);
+            ok('audit_log schema has NO token/hash/password column', !cols.rows.some((r: { column_name: string }) => /token|hash|password|secret/i.test(r.column_name)));
+            const auditResp = await (await fetch(`${ab}/auth/audit`, { headers: H })).json() as { events: { type: string }[] };
+            ok('GET /auth/audit returns the trail over pg (no secrets)', auditResp.events.some(e => e.type === 'member.invited') && !/token|hash|password/i.test(JSON.stringify(auditResp)));
+            await app.close(); await ap.end();
         }
     }
 

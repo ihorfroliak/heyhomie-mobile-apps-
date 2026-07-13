@@ -7,7 +7,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import {
     makeOrderService, makeAuthService, fromUnknown, AppError, RateLimiter, RateLimitedError, IdempotencyStore,
-    type AuthContext, type AuthRepo, type AuthCrypto, type NotificationPort, type Role, type OrderRepo, type ServerConfig, type SubmitOrderResult,
+    type AuthContext, type AuthRepo, type AuthCrypto, type NotificationPort, type AuditPort, type Role, type OrderRepo, type ServerConfig, type SubmitOrderResult,
 } from '@heyhomie/api';
 import { registerRoutes, registerStream, registerAuthRoutes } from './routes.js';
 import { authenticateRequest, signAuthToken } from './auth.js';
@@ -23,7 +23,7 @@ export interface BuiltApp {
 /** Optional auth wiring — injected like the OrderRepo (real crypto+pg in prod,
  *  memory in tests). When omitted, the /auth issuer routes aren't registered
  *  (keeps existing buildApp callers working; back-compat). */
-export interface AuthDeps { repo: AuthRepo; crypto: AuthCrypto; notifications?: NotificationPort; }
+export interface AuthDeps { repo: AuthRepo; crypto: AuthCrypto; notifications?: NotificationPort; audit?: AuditPort; }
 
 export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => Promise<void>, authDeps?: AuthDeps): BuiltApp {
     const metrics = makeServerMetrics();
@@ -169,7 +169,7 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
     if (authDeps) {
         // access-TTL is baked into the crypto adapter (makeAuthCrypto); the service
         // only owns the refresh lifetime.
-        const authService = makeAuthService(authDeps.repo, authDeps.crypto, { refreshTtlSec: config.refreshTtlSec, inviteTtlSec: config.inviteTtlSec, resetTtlSec: config.resetTtlSec });
+        const authService = makeAuthService(authDeps.repo, authDeps.crypto, { refreshTtlSec: config.refreshTtlSec, inviteTtlSec: config.inviteTtlSec, resetTtlSec: config.resetTtlSec, audit: authDeps.audit });
         registerAuthRoutes(app, authService, { devMode: config.devMode, notifications: authDeps.notifications });
     }
 

@@ -7,6 +7,7 @@
  * Run: npx -y tsx packages/api/authSession.test.ts
  */
 import { makeAuthService, memoryAuthRepo, type AuthCrypto } from './authSession';
+import { memoryAuditPort } from './auditPort';
 import { AppError } from './errors';
 import type { AuthContext } from './auth';
 
@@ -222,6 +223,50 @@ async function main() {
         // owner cannot delete self (protects the last owner); tenant integrity preserved
         await throws('owner cannot delete self / the last owner', 'FORBIDDEN', () => svc4.deleteUser(owner.identity.userId, owner.identity));
         ok('tenant integrity preserved (owner + admin remain)', (await svc4.listMembers(owner.identity)).length === 2);
+    }
+
+    // ── Build 27: audit trail — privileged actions emit events; no secrets ──
+    {
+        let c = 5_000_000_000_000;
+        const repo5 = memoryAuthRepo();
+        const svc5 = makeAuthService(repo5, fakeCrypto(), { refreshTtlSec: 100_000, inviteTtlSec: 1000, resetTtlSec: 500, now: () => c, audit: memoryAuditPort() });
+        const owner = await svc5.register({ email: 'a-own@x.com', password: 'ownerpass1' });
+        const iv = await svc5.invite({ email: 'a-wk@x.com', role: 'worker' }, owner.identity);
+        const wk = await svc5.accept({ inviteToken: iv.inviteToken, password: 'wkpass1234' });
+        const iv2 = await svc5.invite({ email: 'a-rev@x.com', role: 'admin' }, owner.identity);
+        await svc5.revokeInvite(iv2.id, owner.identity);
+        await svc5.disableUser(wk.identity.userId, owner.identity);
+        await svc5.enableUser(wk.identity.userId, owner.identity);
+        const rr = await svc5.requestPasswordReset({ email: 'a-own@x.com' });
+        await svc5.confirmPasswordReset({ resetToken: rr!.resetToken, password: 'ownernew12' });
+        await svc5.deleteUser(wk.identity.userId, owner.identity);
+
+        const events = await svc5.listAuditEvents(owner.identity);
+        const types = events.map(e => e.type);
+        const want = ['member.invited', 'member.joined', 'invitation.revoked', 'member.disabled', 'member.enabled', 'password.reset', 'member.deleted'] as const;
+        ok('audit captured every privileged event type', want.every(t => types.includes(t)));
+        ok('audit is newest-first', events[0].type === 'member.deleted');
+        ok('audit events NEVER contain a token/hash/password', !JSON.stringify(events).includes(iv.inviteToken) && !JSON.stringify(events).includes(rr!.resetToken) && !JSON.stringify(events).includes('h(') );
+
+        // role gate: admin can read, worker cannot
+        const iv3 = await svc5.invite({ email: 'a-adm@x.com', role: 'admin' }, owner.identity);
+        const adm = await svc5.accept({ inviteToken: iv3.inviteToken, password: 'admpass1234' });
+        ok('admin can read the audit trail', (await svc5.listAuditEvents(adm.identity)).length > 0);
+        const iv4 = await svc5.invite({ email: 'a-wk2@x.com', role: 'worker' }, owner.identity);
+        const wk2 = await svc5.accept({ inviteToken: iv4.inviteToken, password: 'wk2pass123' });
+        await throws('worker cannot read the audit trail', 'FORBIDDEN', () => svc5.listAuditEvents(wk2.identity));
+
+        // cross-tenant isolation: a different tenant sees none of these events
+        const other = await svc5.register({ email: 'a-other@x.com', password: 'otherpass1' });
+        ok('another tenant sees none of this tenant\'s audit events', (await svc5.listAuditEvents(other.identity)).length === 0);
+
+        // audit is BEST-EFFORT: a throwing sink must not fail the op
+        const throwAudit = { async record() { throw new Error('sink down'); }, async listByTenant() { return []; } };
+        const svc6 = makeAuthService(memoryAuthRepo(), fakeCrypto(), { refreshTtlSec: 100_000, now: () => c, audit: throwAudit });
+        const o6 = await svc6.register({ email: 'a-o6@x.com', password: 'o6pass1234' });
+        let isolated = true;
+        try { await svc6.invite({ email: 'a-w6@x.com', role: 'worker' }, o6.identity); } catch { isolated = false; }
+        ok('a failing audit sink does not fail the auth op (isolated)', isolated);
     }
 
     console.log(`\n${passed} passed, ${fail.length} failed`);

@@ -106,6 +106,13 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService, opts
         await auth.deleteUser(req.params.id, reqAuth(req));
         return reply.code(204).send();
     });
+
+    // Privileged-action audit trail (Build 27). AUTHENTICATED, owner/admin only
+    // (enforced in the service). Never returns tokens/hashes.
+    app.get<{ Querystring: { limit?: string } }>('/auth/audit', async (req) => {
+        const limit = req.query.limit ? Number(req.query.limit) : undefined;
+        return { events: await auth.listAuditEvents(reqAuth(req), Number.isFinite(limit) ? limit : undefined) };
+    });
 }
 
 export function registerRoutes(app: FastifyInstance, service: OrderService, idem?: IdempotencyStore<SubmitOrderResult>): void {

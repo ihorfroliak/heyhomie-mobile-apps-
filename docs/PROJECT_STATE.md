@@ -136,6 +136,19 @@ UI (apps/*)  ──imports only──►  orderGateway  (packages/api/orderContr
      structured records only; the port RECEIVES the token but NEVER logs it; recipients are
      masked (`maskEmail`); token hashes / passwords / refresh tokens are never passed here or
      logged. A real provider (SMTP/SES/SendGrid) is just another `NotificationPort` impl.
+     8. **Accountability via `AuditPort` only** (Build 27) — every privileged / account-lifecycle
+     action (invite, revoke, join, disable, enable, delete, password-reset) MUST emit exactly one
+     `AuditPort` event from the SERVICE (it authoritatively knows actor + target). Emitting is
+     **best-effort + isolated** (a sink failure never fails/rolls-back the op — availability-first;
+     a strict-compliance system would make it blocking, a documented, deliberate choice). **Invariant
+     it protects:** answerability — "who did what, to whom, when" for a multi-user tenant. **Reuse
+     when:** you add any owner/admin action that changes another user's state or access. **Never
+     bypass by:** logging the action ad-hoc in a route, or putting a token/hash/password/email-in-clear
+     into an event (events carry only type/tenant/actor-id/target-id/target-email/timestamp; the pg
+     table has NO token/hash column — schema-enforced; the console sink masks the email). **Consequence
+     of violating:** an un-auditable privileged path = a forensic blind spot + a compliance gap.
+     Read via `GET /auth/audit` (owner/admin, tenant-scoped). A real SIEM/log-shipper is just another
+     `AuditPort` impl.
 - **Client auth (Build 20/21/22)**: `authClient.ts` (sync `getToken`, `authFetch` refresh-on-401,
   login/register/refresh/logout/bootstrap); **all three apps** (client/admin/worker) authenticate
   + gate to `/login` + consume `orderGateway`; tokens live in **expo-secure-store**. Apps never

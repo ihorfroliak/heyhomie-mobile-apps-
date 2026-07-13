@@ -22,9 +22,13 @@ Grouped by whether it's a future code change, an intentional trade-off, or exter
    periodic GC for expired/revoked `auth_sessions`/`invitations`/`password_resets`; a reactive
    auth-state store; a "current session" marker in `GET /auth/sessions`; owner-transfer (today
    the sole `owner` is immovable — the last-owner delete guard is belt-and-suspenders behind
-   the self guard). **Recommended next build:** a real `NotificationPort` provider (SMTP/SES —
-   the seam is done, only a provider impl + `EMAIL_*` config remain) OR the access-token
-   deny-list — the last gaps before a real-user pilot of the full auth lifecycle.
+   the self guard); the audit trail (Build 27) captures privileged actions — future: **audit
+   GC/retention** + shipping `audit_log` to a SIEM (another `AuditPort` impl) + auditing
+   `login.failed` for brute-force forensics. **Recommended next build:** a real `NotificationPort`
+   provider (SMTP/SES — the seam is done, only a provider impl + `EMAIL_*` config remain) OR the
+   access-token deny-list — the last gaps before a real-user pilot of the full auth lifecycle.
+   (The single biggest remaining score gap is **Scalability ~50**, but pagination + SSE-delta are
+   contract-versioned — a deliberate future OrderGateway v2 build, not contract-safe additive work.)
 4. **Real payment/notification transport** — `notifyClient` is a console mock; Stripe
    + Fakturownia + email/SMS adapters are seams (`accountingClient`/`marketingClient`
    are mock/legacy). Wire when credentials exist.

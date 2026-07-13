@@ -38,6 +38,8 @@ export interface InvitationSummary { id: string; email: string; role: 'admin' | 
 export interface SessionSummary { id: string; createdAt: string; lastUsedAt: string; deviceLabel: string | null; }
 /** Client-safe member summary (Build 25) — no password hashes. */
 export interface MemberSummary { id: string; email: string; role: 'owner' | 'admin' | 'worker' | 'member'; status: 'active' | 'disabled'; createdAt: string; }
+/** Client-safe audit row (Build 27) — no secrets. */
+export interface AuditSummary { type: string; actorUserId: string | null; targetEmail: string | null; at: string; }
 
 export interface AuthClient {
     /** Current access token (sync) — feed to `httpOrderPort({ getToken })`. */
@@ -77,6 +79,8 @@ export interface AuthClient {
     enableUser(id: string): Promise<void>;
     /** Owner: permanently delete a member. */
     deleteUser(id: string): Promise<void>;
+    /** Owner/admin: the tenant's privileged-action audit trail (no secrets). */
+    listAuditEvents(limit?: number): Promise<AuditSummary[]>;
 }
 
 export function createAuthClient(cfg: AuthClientConfig): AuthClient {
@@ -186,6 +190,12 @@ export function createAuthClient(cfg: AuthClientConfig): AuthClient {
             const res = await authFetch(`${base}/auth/users/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { authorization: `Bearer ${access}` } });
             if (!res.ok) throw new UnauthorizedError('failed to delete user');
         },
+        async listAuditEvents(limit) {
+            const q = limit ? `?limit=${encodeURIComponent(limit)}` : '';
+            const res = await authFetch(`${base}/auth/audit${q}`, { headers: { authorization: `Bearer ${access}` } });
+            if (!res.ok) throw new UnauthorizedError('failed to list audit events');
+            return ((await res.json()) as { events: AuditSummary[] }).events;
+        },
         async logout() {
             const rt = await session.getRefreshToken();
             if (rt) { try { await post('/auth/logout', { refreshToken: rt }); } catch { /* best-effort revoke */ } }
@@ -233,4 +243,5 @@ export const auth = {
     disableUser: (id: string) => need().disableUser(id),
     enableUser: (id: string) => need().enableUser(id),
     deleteUser: (id: string) => need().deleteUser(id),
+    listAuditEvents: (limit?: number) => need().listAuditEvents(limit),
 };
