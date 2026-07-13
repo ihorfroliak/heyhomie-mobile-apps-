@@ -177,6 +177,53 @@ async function main() {
         await throws('cannot revoke another user session', 'FORBIDDEN', () => svc3.revokeSessionById(regSessionId, owner.identity));
     }
 
+    // ── Build 25: account lifecycle (disable / enable / delete) ──
+    {
+        let c = 4_000_000_000_000;
+        const repo4 = memoryAuthRepo();
+        const svc4 = makeAuthService(repo4, fakeCrypto(), { refreshTtlSec: 100_000, inviteTtlSec: 1000, now: () => c });
+        const owner = await svc4.register({ email: 'own4@x.com', password: 'ownerpass1' });
+        const wi = await svc4.invite({ email: 'wk@x.com', role: 'worker' }, owner.identity);
+        const worker = await svc4.accept({ inviteToken: wi.inviteToken, password: 'workerpw12' });
+        const ai = await svc4.invite({ email: 'ad@x.com', role: 'admin' }, owner.identity);
+        const admin = await svc4.accept({ inviteToken: ai.inviteToken, password: 'adminpw123' });
+
+        // roster: owner/admin can list (no password hashes); worker cannot
+        const members = await svc4.listMembers(owner.identity);
+        ok('owner lists all tenant members (no password hashes)', members.length === 3 && members.every(m => !('passwordHash' in (m as object)) && m.status === 'active'));
+        await throws('worker cannot list members', 'FORBIDDEN', () => svc4.listMembers(worker.identity));
+        ok('admin can list members', (await svc4.listMembers(admin.identity)).length === 3);
+
+        // owner-only + self + cross-tenant guards
+        await throws('non-owner cannot disable', 'FORBIDDEN', () => svc4.disableUser(worker.identity.userId, admin.identity));
+        await throws('owner cannot disable self', 'FORBIDDEN', () => svc4.disableUser(owner.identity.userId, owner.identity));
+        const other = await svc4.register({ email: 'other4@x.com', password: 'otherpass1' });
+        await throws('cross-tenant disable forbidden', 'FORBIDDEN', () => svc4.disableUser(worker.identity.userId, other.identity));
+
+        // DISABLE: login / refresh / reset all forbidden; sessions revoked
+        await svc4.disableUser(worker.identity.userId, owner.identity);
+        ok('disabled member shows status=disabled', (await svc4.listMembers(owner.identity)).find(m => m.email === 'wk@x.com')?.status === 'disabled');
+        await throws('disabled login forbidden', 'UNAUTHENTICATED', () => svc4.login({ email: 'wk@x.com', password: 'workerpw12' }));
+        await throws('disabled refresh forbidden (session revoked)', 'UNAUTHENTICATED', () => svc4.refresh(worker.refreshToken));
+        ok('disabled password-reset forbidden (returns null)', (await svc4.requestPasswordReset({ email: 'wk@x.com' })) === null);
+
+        // ENABLE: login works again
+        await svc4.enableUser(worker.identity.userId, owner.identity);
+        ok('enabled member can log in again', (await svc4.login({ email: 'wk@x.com', password: 'workerpw12' })).identity.role === 'worker');
+
+        // DELETE: revoke pending invitations by the user + remove the account
+        await repo4.insertInvitation({ id: 'ghost-inv', tenantId: owner.identity.tenantId, email: 'g@x.com', role: 'worker', tokenHash: 'Hg', invitedByUserId: worker.identity.userId, expiresAt: new Date(c + 1e6).toISOString(), createdAt: new Date(c).toISOString(), acceptedAt: null, revokedAt: null });
+        await svc4.deleteUser(worker.identity.userId, owner.identity);
+        await throws('deleted member cannot log in', 'UNAUTHENTICATED', () => svc4.login({ email: 'wk@x.com', password: 'workerpw12' }));
+        ok('deleted member removed from roster', !(await svc4.listMembers(owner.identity)).some(m => m.email === 'wk@x.com'));
+        ok("delete revoked the user's pending invitations", (await repo4.findInvitationById('ghost-inv'))?.revokedAt !== null);
+        ok('email freed after delete (re-registrable)', typeof (await svc4.register({ email: 'wk@x.com', password: 'brandnew12' })).accessToken === 'string');
+
+        // owner cannot delete self (protects the last owner); tenant integrity preserved
+        await throws('owner cannot delete self / the last owner', 'FORBIDDEN', () => svc4.deleteUser(owner.identity.userId, owner.identity));
+        ok('tenant integrity preserved (owner + admin remain)', (await svc4.listMembers(owner.identity)).length === 2);
+    }
+
     console.log(`\n${passed} passed, ${fail.length} failed`);
     if (fail.length) { fail.forEach(f => console.log('  FAIL: ' + f)); process.exit(1); }
     console.log('All authSession tests passed.');

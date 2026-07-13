@@ -36,6 +36,8 @@ export interface InviteTokenResult { id: string; inviteToken: string; email: str
 export interface InvitationSummary { id: string; email: string; role: 'admin' | 'worker'; status: 'pending' | 'accepted' | 'revoked' | 'expired'; expiresAt: string; createdAt: string; }
 /** Client-safe session summary (Build 24) — no refresh token. */
 export interface SessionSummary { id: string; createdAt: string; lastUsedAt: string; deviceLabel: string | null; }
+/** Client-safe member summary (Build 25) — no password hashes. */
+export interface MemberSummary { id: string; email: string; role: 'owner' | 'admin' | 'worker' | 'member'; status: 'active' | 'disabled'; createdAt: string; }
 
 export interface AuthClient {
     /** Current access token (sync) — feed to `httpOrderPort({ getToken })`. */
@@ -66,6 +68,15 @@ export interface AuthClient {
     listSessions(): Promise<SessionSummary[]>;
     /** Revoke one of the current user's own sessions. */
     revokeSession(id: string): Promise<void>;
+    // ── Account lifecycle (Build 25, owner-only) ──
+    /** Owner: the tenant's member roster (no password hashes). */
+    listMembers(): Promise<MemberSummary[]>;
+    /** Owner: disable a member (revokes their sessions). */
+    disableUser(id: string): Promise<void>;
+    /** Owner: re-enable a disabled member. */
+    enableUser(id: string): Promise<void>;
+    /** Owner: permanently delete a member. */
+    deleteUser(id: string): Promise<void>;
 }
 
 export function createAuthClient(cfg: AuthClientConfig): AuthClient {
@@ -158,6 +169,23 @@ export function createAuthClient(cfg: AuthClientConfig): AuthClient {
             const res = await authFetch(`${base}/auth/sessions/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { authorization: `Bearer ${access}` } });
             if (!res.ok) throw new UnauthorizedError('failed to revoke session');
         },
+        async listMembers() {
+            const res = await authFetch(`${base}/auth/users`, { headers: { authorization: `Bearer ${access}` } });
+            if (!res.ok) throw new UnauthorizedError('failed to list members');
+            return ((await res.json()) as { users: MemberSummary[] }).users;
+        },
+        async disableUser(id) {
+            const res = await authFetch(`${base}/auth/users/${encodeURIComponent(id)}/disable`, { method: 'POST', headers: { authorization: `Bearer ${access}` } });
+            if (!res.ok) throw new UnauthorizedError('failed to disable user');
+        },
+        async enableUser(id) {
+            const res = await authFetch(`${base}/auth/users/${encodeURIComponent(id)}/enable`, { method: 'POST', headers: { authorization: `Bearer ${access}` } });
+            if (!res.ok) throw new UnauthorizedError('failed to enable user');
+        },
+        async deleteUser(id) {
+            const res = await authFetch(`${base}/auth/users/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { authorization: `Bearer ${access}` } });
+            if (!res.ok) throw new UnauthorizedError('failed to delete user');
+        },
         async logout() {
             const rt = await session.getRefreshToken();
             if (rt) { try { await post('/auth/logout', { refreshToken: rt }); } catch { /* best-effort revoke */ } }
@@ -201,4 +229,8 @@ export const auth = {
     confirmPasswordReset: (resetToken: string, password: string) => need().confirmPasswordReset(resetToken, password),
     listSessions: () => need().listSessions(),
     revokeSession: (id: string) => need().revokeSession(id),
+    listMembers: () => need().listMembers(),
+    disableUser: (id: string) => need().disableUser(id),
+    enableUser: (id: string) => need().enableUser(id),
+    deleteUser: (id: string) => need().deleteUser(id),
 };

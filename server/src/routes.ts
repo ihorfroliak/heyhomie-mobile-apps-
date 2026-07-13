@@ -77,6 +77,22 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService, opts
         await auth.revokeSessionById(req.params.id, reqAuth(req));
         return reply.code(204).send();
     });
+
+    // ── Account lifecycle (Build 25). AUTHENTICATED, owner-only (enforced in the
+    // service via req.auth). Disable/enable/delete a tenant member. ──
+    app.get('/auth/users', async (req) => ({ users: await auth.listMembers(reqAuth(req)) }));
+    app.post<{ Params: { id: string } }>('/auth/users/:id/disable', async (req, reply) => {
+        await auth.disableUser(req.params.id, reqAuth(req));
+        return reply.code(204).send();
+    });
+    app.post<{ Params: { id: string } }>('/auth/users/:id/enable', async (req, reply) => {
+        await auth.enableUser(req.params.id, reqAuth(req));
+        return reply.code(204).send();
+    });
+    app.delete<{ Params: { id: string } }>('/auth/users/:id', async (req, reply) => {
+        await auth.deleteUser(req.params.id, reqAuth(req));
+        return reply.code(204).send();
+    });
 }
 
 export function registerRoutes(app: FastifyInstance, service: OrderService, idem?: IdempotencyStore<SubmitOrderResult>): void {

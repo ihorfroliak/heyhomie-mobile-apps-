@@ -17,6 +17,10 @@ export default function Homies() {
                     <Text style={styles.h1}>Homies</Text>
                     {API_URL ? (
                         <View style={styles.headActions}>
+                            <Pressable style={styles.headBtn} onPress={() => router.push('/members')}>
+                                <Ionicons name="people-outline" size={15} color={colors.primary} />
+                                <Text style={styles.inviteText}>Members</Text>
+                            </Pressable>
                             <Pressable style={styles.headBtn} onPress={() => router.push('/invitations')}>
                                 <Ionicons name="mail-outline" size={15} color={colors.primary} />
                                 <Text style={styles.inviteText}>Invites</Text>

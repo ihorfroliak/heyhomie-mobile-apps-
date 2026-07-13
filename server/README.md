@@ -80,6 +80,10 @@ the Http adapter satisfies the same lifecycle as Local via the in-process fake.
   | POST | `/auth/password-reset/confirm` | `{resetToken,password}` | `204` — set new password + revoke ALL sessions (fresh login) |
   | GET | `/auth/sessions` | **(auth)** | `{sessions:[…]}` — own live sessions (id/createdAt/lastUsedAt/deviceLabel; no refresh tokens) |
   | DELETE | `/auth/sessions/:id` | **(auth)** | `204` — revoke one of your OWN sessions (others' → 403) |
+  | GET | `/auth/users` | **(auth: owner/admin)** | `{users:[…]}` — member roster (id/email/role/status; no hashes) — Build 25 |
+  | POST | `/auth/users/:id/disable` | **(auth: owner)** | `204` — disable a member (revokes all their sessions; login/refresh/reset blocked) |
+  | POST | `/auth/users/:id/enable` | **(auth: owner)** | `204` — re-enable a disabled member |
+  | DELETE | `/auth/users/:id` | **(auth: owner)** | `204` — delete a member (not self / last owner; revokes sessions+invites; cross-tenant → 403) |
 
   Passwords are scrypt-hashed (per-user salt). The **access token** is the same
   short-lived HMAC token as before (`AUTH_ACCESS_TTL_SEC`, default 15 min); the

@@ -29,6 +29,7 @@ export interface User {
     passwordHash: string;
     passwordSalt: string;
     createdAt: string; // ISO
+    disabledAt: string | null; // ISO when disabled, else null (Build 25)
 }
 
 /** Why a session was revoked (Build 24). `rotated` = consumed by a refresh (a
@@ -58,6 +59,15 @@ export interface SessionView {
     createdAt: string;
     lastUsedAt: string;
     deviceLabel: string | null;
+}
+
+/** Client-safe member summary (Build 25) — the owner's roster; no password hashes. */
+export interface MemberView {
+    id: string;
+    email: string;
+    role: Role;
+    status: 'active' | 'disabled';
+    createdAt: string;
 }
 
 /** Client-safe invitation summary (Build 24) — NEVER includes the token hash. */
@@ -125,6 +135,13 @@ export interface AuthRepo {
     findUserByEmail(email: string): Promise<User | undefined>;
     findUserById(id: string): Promise<User | undefined>;
     insertUser(u: User): Promise<void>;
+    // Account lifecycle (Build 25).
+    setUserDisabled(userId: string, at: string | null): Promise<void>;
+    deleteUserById(userId: string): Promise<void>;
+    listUsersByTenant(tenantId: string): Promise<User[]>;
+    countOwners(tenantId: string): Promise<number>;
+    /** Revoke all still-pending invitations created by a user (on their deletion). */
+    revokeInvitationsByInviter(userId: string, at: string): Promise<void>;
     insertSession(s: AuthSession): Promise<void>;
     findSessionByRefreshHash(hash: string): Promise<AuthSession | undefined>;
     findSessionById(id: string): Promise<AuthSession | undefined>;
@@ -222,6 +239,16 @@ export interface AuthService {
     listSessions(auth: AuthContext): Promise<SessionView[]>;
     /** Revoke one of the current user's OWN sessions (never another user's). */
     revokeSessionById(sessionId: string, auth: AuthContext): Promise<void>;
+    // ── Account lifecycle (Build 25, owner-only) ──
+    /** Owner: the tenant's member roster (no password hashes). */
+    listMembers(auth: AuthContext): Promise<MemberView[]>;
+    /** Owner: disable a member (not self) → immediately revokes all their sessions. */
+    disableUser(userId: string, auth: AuthContext): Promise<void>;
+    /** Owner: re-enable a disabled member. */
+    enableUser(userId: string, auth: AuthContext): Promise<void>;
+    /** Owner: permanently delete a member (not self, not the last owner) → revokes
+     *  sessions + pending invitations, removes the account, preserves the tenant. */
+    deleteUser(userId: string, auth: AuthContext): Promise<void>;
 }
 
 /**
@@ -275,6 +302,7 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
                 passwordHash: hash,
                 passwordSalt: salt,
                 createdAt: iso(now()),
+                disabledAt: null,
             };
             await repo.insertUser(user);
             return issue({ userId: user.id, tenantId: user.tenantId, role: user.role }, deviceLabelOf(input.deviceLabel));
@@ -288,7 +316,9 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             // unknown-email and wrong-password paths cost the same time. The `!user`
             // check gates the result, not whether the crypto work happens.
             const okPw = crypto.verifyPassword(password, user?.passwordHash ?? DECOY_HASH, user?.passwordSalt ?? DECOY_SALT);
-            if (!user || !okPw) throw new UnauthorizedError('invalid credentials');
+            // A disabled account is rejected with the SAME generic 401 (no enumeration,
+            // no "your account is disabled" leak). Sessions were revoked at disable time.
+            if (!user || !okPw || user.disabledAt) throw new UnauthorizedError('invalid credentials');
             return issue({ userId: user.id, tenantId: user.tenantId, role: user.role }, deviceLabelOf(input.deviceLabel));
         },
 
@@ -312,6 +342,10 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
                 await repo.revokeSession(session.id, iso(t), 'revoked');
                 throw new UnauthorizedError('refresh token expired');
             }
+            // Defense in depth: even though disable revokes all sessions, re-check the
+            // user is still active before minting a new token (Build 25).
+            const su = await repo.findUserById(session.userId);
+            if (!su || su.disabledAt) throw new UnauthorizedError('invalid refresh token');
             // Single-use rotation: revoke the presented session, issue a fresh one
             // (carrying its device label forward).
             await repo.revokeSession(session.id, iso(t), 'rotated');
@@ -367,6 +401,7 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
                 passwordHash: hash,
                 passwordSalt: salt,
                 createdAt: iso(t),
+                disabledAt: null,
             };
             await repo.insertUser(user); // unique-email enforced (ConflictError on race)
             await repo.markInvitationAccepted(inv.id, iso(t)); // single-use
@@ -397,8 +432,8 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             const email = normalizeEmail(input.email);
             const user = await repo.findUserByEmail(email);
             // Enumeration-safe: always do the same shape of work; only mint+persist a
-            // token when the user exists. The CALLER responds identically either way.
-            if (!user) return null;
+            // token when the user exists AND is active. The CALLER responds identically.
+            if (!user || user.disabledAt) return null;
             const t = now();
             const { token: resetToken, hash: tokenHash } = crypto.newRefresh(); // opaque random + sha256
             await repo.insertPasswordReset({
@@ -433,7 +468,50 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             if (!s || s.userId !== auth.userId) throw new ForbiddenError('session not found');
             if (!s.revokedAt) await repo.revokeSession(s.id, iso(now()), 'revoked');
         },
+
+        // ── Account lifecycle (Build 25). Owner-only; a target is resolved deny-by-
+        // default and cross-tenant/missing/self are all rejected identically. ──
+        async listMembers(auth) {
+            if (auth.role !== 'owner' && auth.role !== 'admin') throw new ForbiddenError('insufficient role');
+            return (await repo.listUsersByTenant(auth.tenantId)).map(u => ({
+                id: u.id, email: u.email, role: u.role, status: u.disabledAt ? 'disabled' as const : 'active' as const, createdAt: u.createdAt,
+            })); // NB: password hashes are never projected
+        },
+
+        async disableUser(userId, auth) {
+            const target = await ownerTarget(userId, auth);
+            await repo.setUserDisabled(target.id, iso(now()));
+            // Kill access immediately: every live session is revoked.
+            await repo.revokeAllUserSessions(target.id, iso(now()), 'revoked');
+        },
+
+        async enableUser(userId, auth) {
+            const target = await ownerTarget(userId, auth);
+            await repo.setUserDisabled(target.id, null); // re-enable; user must log in fresh
+        },
+
+        async deleteUser(userId, auth) {
+            const target = await ownerTarget(userId, auth);
+            // Never orphan a tenant: the last owner cannot be deleted.
+            if (target.role === 'owner' && (await repo.countOwners(auth.tenantId)) <= 1) {
+                throw new ForbiddenError('cannot delete the last owner');
+            }
+            const at = iso(now());
+            await repo.revokeAllUserSessions(target.id, at, 'revoked'); // sessions dead
+            await repo.revokeInvitationsByInviter(target.id, at); // their pending invites dead
+            await repo.deleteUserById(target.id); // account removed; tenant + others intact
+        },
     };
+
+    /** Owner-only target resolver: cross-tenant / missing / self are all denied the
+     *  same way so existence never leaks across tenants (Build 25). */
+    async function ownerTarget(userId: string, auth: AuthContext): Promise<User> {
+        if (auth.role !== 'owner') throw new ForbiddenError('only the owner may manage accounts');
+        if (userId === auth.userId) throw new ForbiddenError('cannot act on your own account');
+        const target = await repo.findUserById(userId);
+        if (!target || target.tenantId !== auth.tenantId) throw new ForbiddenError('user not found');
+        return target;
+    }
 }
 
 /** In-memory AuthRepo for tests / dev. NOT for production (no durability). */
@@ -457,6 +535,19 @@ export function memoryAuthRepo(): AuthRepo {
         async updateUserPassword(userId, hash, salt) {
             const u = usersById.get(userId);
             if (u) { u.passwordHash = hash; u.passwordSalt = salt; }
+        },
+        async setUserDisabled(userId, at) {
+            const u = usersById.get(userId);
+            if (u) u.disabledAt = at;
+        },
+        async deleteUserById(userId) {
+            const u = usersById.get(userId);
+            if (u) { usersById.delete(userId); usersByEmail.delete(u.email); }
+        },
+        async listUsersByTenant(tenantId) { return [...usersById.values()].filter(u => u.tenantId === tenantId); },
+        async countOwners(tenantId) { return [...usersById.values()].filter(u => u.tenantId === tenantId && u.role === 'owner').length; },
+        async revokeInvitationsByInviter(userId, at) {
+            for (const inv of invitesById.values()) if (inv.invitedByUserId === userId && !inv.acceptedAt && !inv.revokedAt) inv.revokedAt = at;
         },
         async insertSession(s) {
             sessionsById.set(s.id, s);

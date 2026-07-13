@@ -39,10 +39,10 @@ async function main() {
     const tMig = Date.now();
     const [runX, runY] = await Promise.all([runMigrations(pool), runMigrations(pool)]);
     console.log(`  [perf] concurrent migration on empty db: ${Date.now() - tMig}ms`);
-    eq('exactly 7 migrations applied across both starts', runX.length + runY.length, 7);
-    ok('one instance migrated, the other waited (0)', (runX.length === 7 && runY.length === 0) || (runY.length === 7 && runX.length === 0));
+    eq('exactly 8 migrations applied across both starts', runX.length + runY.length, 8);
+    ok('one instance migrated, the other waited (0)', (runX.length === 8 && runY.length === 0) || (runY.length === 8 && runX.length === 0));
     const hist = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-    eq('migration history records each version once', hist.rows.map((r: { version: number }) => Number(r.version)), [1, 2, 3, 4, 5, 6, 7]);
+    eq('migration history records each version once', hist.rows.map((r: { version: number }) => Number(r.version)), [1, 2, 3, 4, 5, 6, 7, 8]);
     eq('re-running migrations is a no-op (idempotent)', (await runMigrations(pool)).length, 0);
     await initSchema(pool); // the callers' entrypoint — also idempotent
     const cols = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'orders'`);
@@ -257,6 +257,22 @@ async function main() {
         let oldPwDead = false; try { await svc.login({ email: 'member@pg.pl', password: 'MemberPass1!' }); } catch { oldPwDead = true; }
         ok('old password rejected after reset over pg', oldPwDead);
         ok('new password works after reset over pg', (await svc.login({ email: 'member@pg.pl', password: 'MemberNew1!' })).identity.tenantId === owner.tenantId);
+
+        // ── Build 25: account lifecycle over real pg ──
+        const li = await svc.invite({ email: 'life@pg.pl', role: 'worker' }, owner);
+        const lifeMember = await svc.accept({ inviteToken: li.inviteToken, password: 'LifePass1!' });
+        const lifeId = lifeMember.identity.userId;
+        await svc.disableUser(lifeId, owner);
+        ok('disabled_at persisted over pg', (await pool.query('SELECT disabled_at FROM users WHERE id = $1', [lifeId])).rows[0].disabled_at !== null);
+        ok('disable revoked all sessions over pg', (await pool.query('SELECT count(*)::int AS c FROM auth_sessions WHERE user_id = $1 AND revoked_at IS NULL', [lifeId])).rows[0].c === 0);
+        let dLogin = false; try { await svc.login({ email: 'life@pg.pl', password: 'LifePass1!' }); } catch { dLogin = true; }
+        ok('disabled login rejected over pg', dLogin);
+        await svc.enableUser(lifeId, owner);
+        ok('enabled login works over pg', (await svc.login({ email: 'life@pg.pl', password: 'LifePass1!' })).identity.userId === lifeId);
+        await svc.deleteUser(lifeId, owner);
+        ok('deleted user removed from pg', (await pool.query('SELECT count(*)::int AS c FROM users WHERE id = $1', [lifeId])).rows[0].c === 0);
+        ok('deleted user sessions cascaded from pg (FK ON DELETE CASCADE)', (await pool.query('SELECT count(*)::int AS c FROM auth_sessions WHERE user_id = $1', [lifeId])).rows[0].c === 0);
+        ok('email freed after delete over pg', (await svc.register({ email: 'life@pg.pl', password: 'Fresh12345' })).identity.role === 'owner');
     }
 
     await pool.end();

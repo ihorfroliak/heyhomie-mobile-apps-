@@ -8,7 +8,7 @@ import { ConflictError, type AuthRepo, type AuthSession, type Invitation, type I
 
 interface UserRow {
     id: string; tenant_id: string; email: string; role: Role;
-    password_hash: string; password_salt: string; created_at: string | Date;
+    password_hash: string; password_salt: string; created_at: string | Date; disabled_at: string | Date | null;
 }
 interface SessionRow {
     id: string; user_id: string; tenant_id: string; role: Role;
@@ -42,6 +42,7 @@ const toUser = (r: UserRow): User => ({
     id: r.id, tenantId: r.tenant_id, email: r.email, role: r.role,
     passwordHash: r.password_hash, passwordSalt: r.password_salt,
     createdAt: new Date(r.created_at).toISOString(),
+    disabledAt: r.disabled_at ? new Date(r.disabled_at).toISOString() : null,
 });
 const toSession = (r: SessionRow): AuthSession => ({
     id: r.id, userId: r.user_id, tenantId: r.tenant_id, role: r.role,
@@ -78,6 +79,24 @@ export function pgAuthRepo(pool: Pool): AuthRepo {
         },
         async updateUserPassword(userId, hash, salt) {
             await pool.query('UPDATE users SET password_hash = $2, password_salt = $3 WHERE id = $1', [userId, hash, salt]);
+        },
+        async setUserDisabled(userId, at) {
+            await pool.query('UPDATE users SET disabled_at = $2 WHERE id = $1', [userId, at]);
+        },
+        async deleteUserById(userId) {
+            // auth_sessions + password_resets cascade (FK ON DELETE CASCADE).
+            await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+        },
+        async listUsersByTenant(tenantId) {
+            const r = await pool.query<UserRow>('SELECT * FROM users WHERE tenant_id = $1 ORDER BY created_at', [tenantId]);
+            return r.rows.map(toUser);
+        },
+        async countOwners(tenantId) {
+            const r = await pool.query<{ c: number }>(`SELECT count(*)::int AS c FROM users WHERE tenant_id = $1 AND role = 'owner'`, [tenantId]);
+            return r.rows[0].c;
+        },
+        async revokeInvitationsByInviter(userId, at) {
+            await pool.query('UPDATE invitations SET revoked_at = $2 WHERE invited_by = $1 AND accepted_at IS NULL AND revoked_at IS NULL', [userId, at]);
         },
         async insertSession(s) {
             await pool.query(

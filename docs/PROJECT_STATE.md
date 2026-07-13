@@ -107,12 +107,26 @@ UI (apps/*)  ──imports only──►  orderGateway  (packages/api/orderContr
   login,refresh,logout,invite,accept-invite}`. Email+password (scrypt), HMAC **access token** +
   opaque single-use-rotating **refresh token**. Server: `authCrypto.ts` + `pgAuthRepo.ts`;
   migrations v5 (`users`+`auth_sessions`) + v6 (`invitations`) + v7 (session metadata +
-  `password_resets`). **One tenant → many users**: `register` mints an `owner`; the owner
-  `invite`s members (`admin`/`worker`) via a one-time token; `accept` joins them. **Auth ops
-  (Build 24):** invitation list/revoke (owner/admin), **password reset** (`/auth/password-reset/*`
-  — enumeration-safe, revokes all sessions), **session mgmt** (`/auth/sessions` list + revoke-own;
-  `revokedReason` distinguishes rotation from deliberate revoke). `Role` = `owner|admin|worker|member`.
-  Contract + access-token format unchanged.
+  `password_resets`) + v8 (`users.disabled_at`). **One tenant → many users**: `register` mints
+  an `owner`; the owner `invite`s members (`admin`/`worker`); `accept` joins them. **Auth ops
+  (Build 24):** invitation list/revoke, password reset (enumeration-safe, revokes all sessions),
+  session mgmt (`revokedReason` distinguishes rotation from deliberate revoke). **Account
+  lifecycle (Build 25):** owner `disableUser`/`enableUser`/`deleteUser` + `listMembers`
+  (`/auth/users*`). Disabled → login/refresh/reset rejected + sessions revoked; deleted →
+  sessions + pending invites revoked, row removed (cascades), email freed, tenant intact.
+  Invariants: owner-only, not-self, not-last-owner, cross-tenant-forbidden. `Role` =
+  `owner|admin|worker|member`. Contract + access-token format unchanged.
+
+  **Auth project standards (reusable conventions, follow for any new auth surface):**
+  1. **One engine** — all auth logic lives in the pure `makeAuthService` (injected `AuthRepo`
+     + `AuthCrypto`); server wires `pgAuthRepo`+`authCrypto`, tests wire memory+fake. Never add
+     a parallel auth path. 2. **Capability tokens** (refresh / invite / reset) — opaque random
+     via `crypto.newRefresh()`, **sha256-stored**, single-use, expiring; the raw token leaves
+     once. 3. **Enumeration-safe** — unknown-email and disabled paths return the SAME shape as
+     wrong-password (generic 401 / null), with constant-work verification. 4. **Deny-by-default
+     resolver** (`ownerTarget`) — missing / cross-tenant / self are rejected identically so
+     existence never leaks. 5. **Views omit secrets** — `*View`/`*Summary` never carry hashes.
+     6. **Never touch OrderGateway** — auth is orthogonal, injected at the transport/service.
 - **Client auth (Build 20/21/22)**: `authClient.ts` (sync `getToken`, `authFetch` refresh-on-401,
   login/register/refresh/logout/bootstrap); **all three apps** (client/admin/worker) authenticate
   + gate to `/login` + consume `orderGateway`; tokens live in **expo-secure-store**. Apps never

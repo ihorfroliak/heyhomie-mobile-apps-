@@ -184,6 +184,38 @@ async function main() {
     await newLogin.login('reset@e2e.pl', 'ResetNewPass1');
     ok('new password logs in after reset', typeof newLogin.getToken() === 'string');
 
+    // ── Build 25: account lifecycle over HTTP (owner disables/enables/deletes) ──
+    const li = await authClient.invite('lifecycle@e2e.pl', 'worker');
+    const lifeStore = memorySecureStore();
+    const lifeMember = createAuthClient({ baseUrl: base, store: lifeStore });
+    await lifeMember.acceptInvite(li.inviteToken, 'LifeMemberP1');
+    const memberRow = (await authClient.listMembers()).find(m => m.email === 'lifecycle@e2e.pl');
+    ok('owner sees the new member as active (no password hashes)', !!memberRow && memberRow.status === 'active');
+    // worker cannot manage accounts (owner/admin only for list; owner-only for mutate)
+    let memberForbidden = false; try { await lifeMember.listMembers(); } catch { memberForbidden = true; }
+    ok('non-owner member cannot list members', memberForbidden);
+
+    // DISABLE → refresh + login forbidden (sessions revoked); roster shows disabled
+    await authClient.disableUser(memberRow!.id);
+    ok('member shows disabled in the roster', (await authClient.listMembers()).find(m => m.id === memberRow!.id)?.status === 'disabled');
+    const lifeRefresh = await lifeStore.getItem('heyhomie.auth.refresh');
+    const disabledRefresh = (await fetch(`${base}/auth/refresh`, { method: 'POST', headers: jh, body: JSON.stringify({ refreshToken: lifeRefresh }) })).status;
+    ok('disabled member refresh rejected (sessions revoked) → 401', disabledRefresh === 401);
+    let disabledLogin = false; try { await createAuthClient({ baseUrl: base, store: memorySecureStore() }).login('lifecycle@e2e.pl', 'LifeMemberP1'); } catch { disabledLogin = true; }
+    ok('disabled member cannot log in', disabledLogin);
+
+    // ENABLE → login works again
+    await authClient.enableUser(memberRow!.id);
+    const reLogin = createAuthClient({ baseUrl: base, store: memorySecureStore() });
+    await reLogin.login('lifecycle@e2e.pl', 'LifeMemberP1');
+    ok('enabled member logs in again', typeof reLogin.getToken() === 'string');
+
+    // DELETE → removed from roster + login rejected + email freed
+    await authClient.deleteUser(memberRow!.id);
+    ok('deleted member removed from the roster', !(await authClient.listMembers()).some(m => m.id === memberRow!.id));
+    let deletedLogin = false; try { await createAuthClient({ baseUrl: base, store: memorySecureStore() }).login('lifecycle@e2e.pl', 'LifeMemberP1'); } catch { deletedLogin = true; }
+    ok('deleted member cannot log in', deletedLogin);
+
     // 7) LOGOUT → tokens gone → requests rejected
     await authClient.logout();
     ok('logout clears the access token', authClient.getToken() === undefined);

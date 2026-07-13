@@ -125,6 +125,15 @@ const MIGRATIONS: Migration[] = [
             );
             CREATE INDEX IF NOT EXISTS password_resets_user_idx ON password_resets (user_id);`,
     },
+    {
+        // Build 25 — account lifecycle. `disabled_at` marks a suspended account
+        // (login/refresh/reset forbidden while set). Permanent delete is a hard row
+        // removal; auth_sessions + password_resets cascade (their FKs are ON DELETE
+        // CASCADE), invitations are revoked in the service. Additive.
+        version: 8,
+        name: 'user_disabled_at',
+        sql: `ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at timestamptz;`,
+    },
 ];
 
 export async function runMigrations(pool: Pool): Promise<number[]> {
