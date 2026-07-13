@@ -41,7 +41,10 @@ export default function Login() {
                 <TextInput style={styles.input} placeholder="Password" placeholderTextColor={colors.grey} secureTextEntry value={password} onChangeText={setPassword} />
                 {error ? <Text style={styles.error}>{error}</Text> : null}
                 <Button label={busy ? 'Signing in...' : 'Sign in'} variant="teal" disabled={busy || !email || !password} style={{ marginTop: spacing.lg }} onPress={submit} />
-                <Pressable onPress={() => router.push('/register')} style={styles.linkWrap}>
+                <Pressable onPress={() => router.push('/password-reset')} style={styles.linkWrap}>
+                    <Text style={styles.link}>Forgot your password?</Text>
+                </Pressable>
+                <Pressable onPress={() => router.push('/register')} style={styles.linkWrapTight}>
                     <Text style={styles.link}>New here? Create an account</Text>
                 </Pressable>
             </View>
@@ -57,5 +60,6 @@ const styles = StyleSheet.create({
     input: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 14, fontSize: typography.sizes.body, color: colors.primary, marginBottom: spacing.md },
     error: { color: colors.danger, fontSize: typography.sizes.small, marginBottom: spacing.sm },
     linkWrap: { marginTop: spacing.lg, alignItems: 'center' },
+    linkWrapTight: { marginTop: spacing.md, alignItems: 'center' },
     link: { color: colors.blue, fontSize: typography.sizes.small },
 });

@@ -45,7 +45,10 @@ export function verifyAuthToken(token: string, secret: string, opts?: VerifyToke
 // (dev-only), and the auth endpoints that ESTABLISH identity — register/login/
 // refresh/logout/accept-invite. NOT every /auth/* route: `/auth/invite` is an
 // authenticated, owner-only action (Build 23), so it must go through auth.
-const PRE_AUTH_ROUTES = new Set(['/auth/register', '/auth/login', '/auth/refresh', '/auth/logout', '/auth/accept-invite']);
+const PRE_AUTH_ROUTES = new Set([
+    '/auth/register', '/auth/login', '/auth/refresh', '/auth/logout', '/auth/accept-invite',
+    '/auth/password-reset/request', '/auth/password-reset/confirm', // Build 24: pre-auth by nature
+]);
 const isPublic = (url: string) => {
     if (url.startsWith('/health') || url.startsWith('/metrics') || url.startsWith('/dev/token')) return true;
     const path = url.split('?')[0];

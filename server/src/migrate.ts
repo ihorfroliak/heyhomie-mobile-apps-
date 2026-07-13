@@ -103,6 +103,28 @@ const MIGRATIONS: Migration[] = [
             );
             CREATE INDEX IF NOT EXISTS invitations_tenant_idx ON invitations (tenant_id);`,
     },
+    {
+        // Build 24 — auth operations. Session metadata (last_used_at / device_label /
+        // revoked_reason) for session management, plus a password_resets table
+        // (sha256 one-time token, expiring). Additive; existing rows default sanely.
+        version: 7,
+        name: 'auth_ops',
+        sql: `
+            ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS last_used_at   timestamptz;
+            ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS device_label   text;
+            ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS revoked_reason text;
+            UPDATE auth_sessions SET last_used_at = created_at WHERE last_used_at IS NULL;
+            CREATE TABLE IF NOT EXISTS password_resets (
+                id         text PRIMARY KEY,
+                user_id    text        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                email      text        NOT NULL,
+                token_hash text        NOT NULL UNIQUE,
+                expires_at timestamptz NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                used_at    timestamptz
+            );
+            CREATE INDEX IF NOT EXISTS password_resets_user_idx ON password_resets (user_id);`,
+    },
 ];
 
 export async function runMigrations(pool: Pool): Promise<number[]> {

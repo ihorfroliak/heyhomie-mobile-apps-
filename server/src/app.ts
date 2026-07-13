@@ -169,8 +169,8 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
     if (authDeps) {
         // access-TTL is baked into the crypto adapter (makeAuthCrypto); the service
         // only owns the refresh lifetime.
-        const authService = makeAuthService(authDeps.repo, authDeps.crypto, { refreshTtlSec: config.refreshTtlSec, inviteTtlSec: config.inviteTtlSec });
-        registerAuthRoutes(app, authService);
+        const authService = makeAuthService(authDeps.repo, authDeps.crypto, { refreshTtlSec: config.refreshTtlSec, inviteTtlSec: config.inviteTtlSec, resetTtlSec: config.resetTtlSec });
+        registerAuthRoutes(app, authService, { devMode: config.devMode });
     }
 
     app.addHook('preHandler', authenticateRequest(config.authSecret, config.devMode));

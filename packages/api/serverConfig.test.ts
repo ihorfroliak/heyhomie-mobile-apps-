@@ -44,6 +44,8 @@ ok('access ≥ refresh rejected', issues({ ...good, AUTH_ACCESS_TTL_SEC: '4000',
 eq('custom refresh TTL parsed', loadServerConfig({ ...good, AUTH_REFRESH_TTL_SEC: '604800' }).refreshTtlSec, 604_800);
 eq('invite TTL default 7d', cfg.inviteTtlSec, 604_800);
 ok('invalid AUTH_INVITE_TTL_SEC rejected', issues({ ...good, AUTH_INVITE_TTL_SEC: '7d' }).some(i => i.includes('AUTH_INVITE_TTL_SEC')));
+eq('reset TTL default 1h', cfg.resetTtlSec, 3_600);
+ok('invalid AUTH_RESET_TTL_SEC rejected', issues({ ...good, AUTH_RESET_TTL_SEC: '1h' }).some(i => i.includes('AUTH_RESET_TTL_SEC')));
 
 // aggregates ALL problems, not just the first
 ok('reports every issue at once', issues({ PORT: 'x' }).length >= 3);

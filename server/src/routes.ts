@@ -9,7 +9,7 @@ import { reqAuth } from './auth.js';
  * an access + refresh pair; refresh rotates (single-use); logout revokes. The
  * service returns canonical AppErrors (401 generic → no enumeration).
  */
-export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): void {
+export function registerAuthRoutes(app: FastifyInstance, auth: AuthService, opts?: { devMode?: boolean }): void {
     const body = (b: unknown): Record<string, unknown> => {
         if (!b || typeof b !== 'object') throw new ValidationError('invalid request body');
         return b as Record<string, unknown>;
@@ -48,6 +48,34 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): voi
     app.post('/auth/accept-invite', async (req) => {
         const b = body(req.body);
         return wire(await auth.accept({ inviteToken: b.inviteToken as string, password: b.password as string }));
+    });
+
+    // ── Auth operations (Build 24). All /auth/invitations + /auth/sessions are
+    // AUTHENTICATED (not in the pre-auth set); password-reset is public. ──
+    app.get('/auth/invitations', async (req) => ({ invitations: await auth.listInvitations(reqAuth(req)) }));
+    app.post<{ Params: { id: string } }>('/auth/invitations/:id/revoke', async (req, reply) => {
+        await auth.revokeInvite(req.params.id, reqAuth(req));
+        return reply.code(204).send();
+    });
+
+    app.post('/auth/password-reset/request', async (req, reply) => {
+        const b = body(req.body);
+        const res = await auth.requestPasswordReset({ email: b.email as string });
+        // Enumeration-safe: ALWAYS 200 regardless of whether the email exists. The
+        // token is delivered out-of-band (email); it is echoed ONLY in dev mode, the
+        // same gate as /dev/token — never in production.
+        return reply.code(200).send(opts?.devMode && res ? { resetToken: res.resetToken } : {});
+    });
+    app.post('/auth/password-reset/confirm', async (req, reply) => {
+        const b = body(req.body);
+        await auth.confirmPasswordReset({ resetToken: b.resetToken as string, password: b.password as string });
+        return reply.code(204).send();
+    });
+
+    app.get('/auth/sessions', async (req) => ({ sessions: await auth.listSessions(reqAuth(req)) }));
+    app.delete<{ Params: { id: string } }>('/auth/sessions/:id', async (req, reply) => {
+        await auth.revokeSessionById(req.params.id, reqAuth(req));
+        return reply.code(204).send();
     });
 }
 

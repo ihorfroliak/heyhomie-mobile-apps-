@@ -4,7 +4,7 @@
  * v5); a duplicate-email insert surfaces as a canonical ConflictError.
  */
 import type { Pool } from 'pg';
-import { ConflictError, type AuthRepo, type AuthSession, type Invitation, type InviteRole, type Role, type User } from '@heyhomie/api';
+import { ConflictError, type AuthRepo, type AuthSession, type Invitation, type InviteRole, type PasswordReset, type RevokedReason, type Role, type User } from '@heyhomie/api';
 
 interface UserRow {
     id: string; tenant_id: string; email: string; role: Role;
@@ -12,8 +12,20 @@ interface UserRow {
 }
 interface SessionRow {
     id: string; user_id: string; tenant_id: string; role: Role;
-    refresh_hash: string; expires_at: string | Date; created_at: string | Date; revoked_at: string | Date | null;
+    refresh_hash: string; expires_at: string | Date; created_at: string | Date;
+    last_used_at: string | Date | null; device_label: string | null;
+    revoked_at: string | Date | null; revoked_reason: RevokedReason | null;
 }
+interface ResetRow {
+    id: string; user_id: string; email: string; token_hash: string;
+    expires_at: string | Date; created_at: string | Date; used_at: string | Date | null;
+}
+const toReset = (r: ResetRow): PasswordReset => ({
+    id: r.id, userId: r.user_id, email: r.email, tokenHash: r.token_hash,
+    expiresAt: new Date(r.expires_at).toISOString(),
+    createdAt: new Date(r.created_at).toISOString(),
+    usedAt: r.used_at ? new Date(r.used_at).toISOString() : null,
+});
 interface InviteRow {
     id: string; tenant_id: string; email: string; role: InviteRole; token_hash: string; invited_by: string;
     expires_at: string | Date; created_at: string | Date; accepted_at: string | Date | null; revoked_at: string | Date | null;
@@ -36,7 +48,10 @@ const toSession = (r: SessionRow): AuthSession => ({
     refreshHash: r.refresh_hash,
     expiresAt: new Date(r.expires_at).toISOString(),
     createdAt: new Date(r.created_at).toISOString(),
+    lastUsedAt: new Date(r.last_used_at ?? r.created_at).toISOString(),
+    deviceLabel: r.device_label ?? null,
     revokedAt: r.revoked_at ? new Date(r.revoked_at).toISOString() : null,
+    revokedReason: r.revoked_reason ?? null,
 });
 
 export function pgAuthRepo(pool: Pool): AuthRepo {
@@ -61,22 +76,33 @@ export function pgAuthRepo(pool: Pool): AuthRepo {
                 throw e;
             }
         },
+        async updateUserPassword(userId, hash, salt) {
+            await pool.query('UPDATE users SET password_hash = $2, password_salt = $3 WHERE id = $1', [userId, hash, salt]);
+        },
         async insertSession(s) {
             await pool.query(
-                `INSERT INTO auth_sessions (id, user_id, tenant_id, role, refresh_hash, expires_at, created_at, revoked_at)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-                [s.id, s.userId, s.tenantId, s.role, s.refreshHash, s.expiresAt, s.createdAt, s.revokedAt],
+                `INSERT INTO auth_sessions (id, user_id, tenant_id, role, refresh_hash, expires_at, created_at, last_used_at, device_label, revoked_at, revoked_reason)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+                [s.id, s.userId, s.tenantId, s.role, s.refreshHash, s.expiresAt, s.createdAt, s.lastUsedAt, s.deviceLabel, s.revokedAt, s.revokedReason],
             );
         },
         async findSessionByRefreshHash(hash) {
             const r = await pool.query<SessionRow>('SELECT * FROM auth_sessions WHERE refresh_hash = $1', [hash]);
             return r.rows[0] ? toSession(r.rows[0]) : undefined;
         },
-        async revokeSession(id, at) {
-            await pool.query('UPDATE auth_sessions SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL', [id, at]);
+        async findSessionById(id) {
+            const r = await pool.query<SessionRow>('SELECT * FROM auth_sessions WHERE id = $1', [id]);
+            return r.rows[0] ? toSession(r.rows[0]) : undefined;
         },
-        async revokeAllUserSessions(userId, at) {
-            await pool.query('UPDATE auth_sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL', [userId, at]);
+        async listSessionsByUser(userId) {
+            const r = await pool.query<SessionRow>('SELECT * FROM auth_sessions WHERE user_id = $1 ORDER BY created_at DESC', [userId]);
+            return r.rows.map(toSession);
+        },
+        async revokeSession(id, at, reason) {
+            await pool.query('UPDATE auth_sessions SET revoked_at = $2, revoked_reason = $3 WHERE id = $1 AND revoked_at IS NULL', [id, at, reason]);
+        },
+        async revokeAllUserSessions(userId, at, reason) {
+            await pool.query('UPDATE auth_sessions SET revoked_at = $2, revoked_reason = $3 WHERE user_id = $1 AND revoked_at IS NULL', [userId, at, reason]);
         },
         async insertInvitation(inv) {
             await pool.query(
@@ -93,11 +119,29 @@ export function pgAuthRepo(pool: Pool): AuthRepo {
             const r = await pool.query<InviteRow>('SELECT * FROM invitations WHERE id = $1', [id]);
             return r.rows[0] ? toInvite(r.rows[0]) : undefined;
         },
+        async listInvitationsByTenant(tenantId) {
+            const r = await pool.query<InviteRow>('SELECT * FROM invitations WHERE tenant_id = $1 ORDER BY created_at DESC', [tenantId]);
+            return r.rows.map(toInvite);
+        },
         async markInvitationAccepted(id, at) {
             await pool.query('UPDATE invitations SET accepted_at = $2 WHERE id = $1 AND accepted_at IS NULL', [id, at]);
         },
         async revokeInvitation(id, at) {
             await pool.query('UPDATE invitations SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL', [id, at]);
+        },
+        async insertPasswordReset(pr) {
+            await pool.query(
+                `INSERT INTO password_resets (id, user_id, email, token_hash, expires_at, created_at, used_at)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+                [pr.id, pr.userId, pr.email, pr.tokenHash, pr.expiresAt, pr.createdAt, pr.usedAt],
+            );
+        },
+        async findPasswordResetByTokenHash(hash) {
+            const r = await pool.query<ResetRow>('SELECT * FROM password_resets WHERE token_hash = $1', [hash]);
+            return r.rows[0] ? toReset(r.rows[0]) : undefined;
+        },
+        async markPasswordResetUsed(id, at) {
+            await pool.query('UPDATE password_resets SET used_at = $2 WHERE id = $1 AND used_at IS NULL', [id, at]);
         },
     };
 }

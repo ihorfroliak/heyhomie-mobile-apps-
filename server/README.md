@@ -74,6 +74,12 @@ the Http adapter satisfies the same lifecycle as Local via the in-process fake.
   | POST | `/auth/logout` | `{refreshToken}` | `204` — revokes the session |
   | POST | `/auth/invite` | `{email,role}` **(auth: owner)** | `201 {id,inviteToken,email,role,expiresIn}` — one-time member invite (Build 23) |
   | POST | `/auth/accept-invite` | `{inviteToken,password}` | `200 {…}` — join the tenant + set password once → logged in |
+  | GET | `/auth/invitations` | **(auth: owner/admin)** | `{invitations:[…]}` — email/role/status/expiry (never token hashes) — Build 24 |
+  | POST | `/auth/invitations/:id/revoke` | **(auth: owner)** | `204` — revoke a pending invite (not an accepted one; cross-tenant → 403) |
+  | POST | `/auth/password-reset/request` | `{email}` | `200 {}` — identical whether the email exists; token emailed (dev-echoed) |
+  | POST | `/auth/password-reset/confirm` | `{resetToken,password}` | `204` — set new password + revoke ALL sessions (fresh login) |
+  | GET | `/auth/sessions` | **(auth)** | `{sessions:[…]}` — own live sessions (id/createdAt/lastUsedAt/deviceLabel; no refresh tokens) |
+  | DELETE | `/auth/sessions/:id` | **(auth)** | `204` — revoke one of your OWN sessions (others' → 403) |
 
   Passwords are scrypt-hashed (per-user salt). The **access token** is the same
   short-lived HMAC token as before (`AUTH_ACCESS_TTL_SEC`, default 15 min); the

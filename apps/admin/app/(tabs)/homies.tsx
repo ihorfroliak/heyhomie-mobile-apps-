@@ -16,10 +16,16 @@ export default function Homies() {
                 <View style={styles.headRow}>
                     <Text style={styles.h1}>Homies</Text>
                     {API_URL ? (
-                        <Pressable style={styles.invite} onPress={() => router.push('/invite')}>
-                            <Ionicons name="person-add-outline" size={15} color={colors.primary} />
-                            <Text style={styles.inviteText}>Invite</Text>
-                        </Pressable>
+                        <View style={styles.headActions}>
+                            <Pressable style={styles.headBtn} onPress={() => router.push('/invitations')}>
+                                <Ionicons name="mail-outline" size={15} color={colors.primary} />
+                                <Text style={styles.inviteText}>Invites</Text>
+                            </Pressable>
+                            <Pressable style={styles.invite} onPress={() => router.push('/invite')}>
+                                <Ionicons name="person-add-outline" size={15} color={colors.primary} />
+                                <Text style={styles.inviteText}>Invite</Text>
+                            </Pressable>
+                        </View>
                     ) : null}
                 </View>
                 {homies.map(h => (
@@ -67,6 +73,8 @@ const styles = StyleSheet.create({
     body: { padding: spacing.lg },
     h1: { fontSize: typography.sizes.h2, fontWeight: '700', color: colors.primary },
     headRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.lg },
+    headActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+    headBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7, borderWidth: 1, borderColor: colors.border },
     invite: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.salad, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7 },
     inviteText: { color: colors.primary, fontSize: typography.sizes.small, fontWeight: '700' },
     row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border },

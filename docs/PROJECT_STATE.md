@@ -106,10 +106,13 @@ UI (apps/*)  ──imports only──►  orderGateway  (packages/api/orderContr
   `makeAuthService` (injected `AuthRepo`+`AuthCrypto`, mirrors `orderService`) → `/auth/{register,
   login,refresh,logout,invite,accept-invite}`. Email+password (scrypt), HMAC **access token** +
   opaque single-use-rotating **refresh token**. Server: `authCrypto.ts` + `pgAuthRepo.ts`;
-  migrations v5 (`users`+`auth_sessions`) + v6 (`invitations`). **One tenant → many users**:
-  `register` mints an `owner` (new tenant); the owner `invite`s members (`admin`/`worker`) via a
-  one-time, expiring, revocable token; `accept` joins them to the owner's tenant. `Role` =
-  `owner|admin|worker|member` (member = legacy). Contract + access-token format unchanged.
+  migrations v5 (`users`+`auth_sessions`) + v6 (`invitations`) + v7 (session metadata +
+  `password_resets`). **One tenant → many users**: `register` mints an `owner`; the owner
+  `invite`s members (`admin`/`worker`) via a one-time token; `accept` joins them. **Auth ops
+  (Build 24):** invitation list/revoke (owner/admin), **password reset** (`/auth/password-reset/*`
+  — enumeration-safe, revokes all sessions), **session mgmt** (`/auth/sessions` list + revoke-own;
+  `revokedReason` distinguishes rotation from deliberate revoke). `Role` = `owner|admin|worker|member`.
+  Contract + access-token format unchanged.
 - **Client auth (Build 20/21/22)**: `authClient.ts` (sync `getToken`, `authFetch` refresh-on-401,
   login/register/refresh/logout/bootstrap); **all three apps** (client/admin/worker) authenticate
   + gate to `/login` + consume `orderGateway`; tokens live in **expo-secure-store**. Apps never

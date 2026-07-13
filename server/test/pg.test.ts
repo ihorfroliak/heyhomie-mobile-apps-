@@ -25,7 +25,8 @@ const authB: AuthContext = { userId: 'b', tenantId: 'T2', role: 'member' };
 
 async function main() {
     const pool = makePool(PG_URL);
-    await pool.query('DROP TABLE IF EXISTS invitations'); // clean slate (test db only)
+    await pool.query('DROP TABLE IF EXISTS password_resets'); // clean slate (test db only)
+    await pool.query('DROP TABLE IF EXISTS invitations');
     await pool.query('DROP TABLE IF EXISTS auth_sessions');
     await pool.query('DROP TABLE IF EXISTS users');
     await pool.query('DROP TABLE IF EXISTS orders');
@@ -38,10 +39,10 @@ async function main() {
     const tMig = Date.now();
     const [runX, runY] = await Promise.all([runMigrations(pool), runMigrations(pool)]);
     console.log(`  [perf] concurrent migration on empty db: ${Date.now() - tMig}ms`);
-    eq('exactly 6 migrations applied across both starts', runX.length + runY.length, 6);
-    ok('one instance migrated, the other waited (0)', (runX.length === 6 && runY.length === 0) || (runY.length === 6 && runX.length === 0));
+    eq('exactly 7 migrations applied across both starts', runX.length + runY.length, 7);
+    ok('one instance migrated, the other waited (0)', (runX.length === 7 && runY.length === 0) || (runY.length === 7 && runX.length === 0));
     const hist = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-    eq('migration history records each version once', hist.rows.map((r: { version: number }) => Number(r.version)), [1, 2, 3, 4, 5, 6]);
+    eq('migration history records each version once', hist.rows.map((r: { version: number }) => Number(r.version)), [1, 2, 3, 4, 5, 6, 7]);
     eq('re-running migrations is a no-op (idempotent)', (await runMigrations(pool)).length, 0);
     await initSchema(pool); // the callers' entrypoint — also idempotent
     const cols = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'orders'`);
@@ -232,6 +233,30 @@ async function main() {
         try { await svc.accept({ inviteToken: inv.inviteToken, password: 'MemberPass1!' }); } catch { inviteReuse = true; }
         ok('reused invitation rejected over pg', inviteReuse);
         ok('invited member can log in over pg', (await svc.login({ email: 'member@pg.pl', password: 'MemberPass1!' })).identity.tenantId === owner.tenantId);
+
+        // ── Build 24: auth operations over real pg ──
+        // invitation management: list reflects DB status
+        const list = await svc.listInvitations(owner);
+        ok('listInvitations reflects accepted status over pg', list.find(i => i.email === 'member@pg.pl')?.status === 'accepted');
+        // sessions: two logins → two live rows; revoke one → the other still refreshes
+        const a = await svc.login({ email: 'member@pg.pl', password: 'MemberPass1!', deviceLabel: 'A' });
+        const b = await svc.login({ email: 'member@pg.pl', password: 'MemberPass1!', deviceLabel: 'B' });
+        const memberId = a.identity.userId;
+        const liveRows = await pool.query('SELECT count(*)::int AS c FROM auth_sessions WHERE user_id = $1 AND revoked_at IS NULL', [memberId]);
+        ok('multiple live sessions persisted over pg (>=2)', liveRows.rows[0].c >= 2);
+        const sessA = (await svc.listSessions(a.identity)).find(s => s.deviceLabel === 'A');
+        await svc.revokeSessionById(sessA!.id, a.identity);
+        let aDead = false; try { await svc.refresh(a.refreshToken); } catch { aDead = true; }
+        ok('revoked session refresh rejected over pg', aDead);
+        ok('the other session still refreshes over pg (revoke-one isolation)', !!(await svc.refresh(b.refreshToken)).accessToken);
+        // password reset over pg: reset → old sessions revoked → old pw dead → new pw works
+        const rr = await svc.requestPasswordReset({ email: 'member@pg.pl' });
+        await svc.confirmPasswordReset({ resetToken: rr!.resetToken, password: 'MemberNew1!' });
+        const usedRow = await pool.query('SELECT used_at FROM password_resets WHERE user_id = $1', [memberId]);
+        ok('password_reset marked used in DB (single-use)', usedRow.rows[0].used_at !== null);
+        let oldPwDead = false; try { await svc.login({ email: 'member@pg.pl', password: 'MemberPass1!' }); } catch { oldPwDead = true; }
+        ok('old password rejected after reset over pg', oldPwDead);
+        ok('new password works after reset over pg', (await svc.login({ email: 'member@pg.pl', password: 'MemberNew1!' })).identity.tenantId === owner.tenantId);
     }
 
     await pool.end();

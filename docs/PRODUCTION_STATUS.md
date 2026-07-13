@@ -8,13 +8,13 @@ Latest build → [BUILD_HISTORY.md](BUILD_HISTORY.md). Gate (`npm run check`): a
 | Production | ~82 | full stack runs correctly on real docker+pg; external infra pending |
 | Reliability | 89 | CAS exactly-once, restart recovery, SSE-leak + shutdown re-entrancy fixed |
 | Correctness/Concurrency | 84 | 100-parallel exactly-once (real pg), property tests, terminal invariants + DB CHECK |
-| Security | 88 | credential auth issuer (scrypt, access+refresh, single-use rotation w/ reuse-detection, enumeration-safe), **per-user accounts via one-time owner invites** (expiring/single-use/revocable/owner-only — Build 23), encrypted mobile token storage (expo-secure-store) + route gate (Build 21), HMAC token exp+skew, tenant isolation (service+repo+CHECK; apps never see role/tenant), rate-limit hardened, redaction, no SQL/JSON injection (parameterized) |
+| Security | 89 | credential auth issuer (scrypt, access+refresh, single-use rotation w/ reuse-detection, enumeration-safe), per-user accounts via one-time owner invites (Build 23), **account lifecycle** — password reset (enumeration-safe, revokes all sessions) + self-service session management (own-only, `revokedReason` isolates revokes) + invitation list/revoke (Build 24), encrypted mobile token storage + route gate (Build 21), HMAC token exp+skew, tenant isolation (service+repo+CHECK; apps never see role/tenant), rate-limit hardened, redaction, no SQL/JSON injection (parameterized) |
 | Observability | 78 | Prometheus `/metrics`, correlation ids end-to-end, structured logs, incident playbook |
 | Operations | 81 | k8s graceful shutdown, rolling deploy, backup/restore, health probes — all measured |
 | Deployment | 85 | docker build + compose healthy + restart verified; non-root, reproducible build |
 | Infrastructure | 78 | containerized stack proven; single-instance (multi-instance needs shared state) |
 | Maintainability | 87 | clean layering, anti-dep guard, frozen contract, docs; server typecheck now clean + gated (Build 19) |
-| Testability | 94 | 697 gated assertions + live/e2e/pg/ops/load/repro harnesses; CI runs the strongest suites — `test:pg`+`test:ops` (real pg), `test:live`, `test:e2e` (client + worker + member-invite journeys), `typecheck:server`; one-command `verify:full`. Mobile UI not machine-run (no Expo runtime) — auth + gateway logic proven via e2e + session/authClient/authSession gate tests |
+| Testability | 94 | 717 gated assertions + live/e2e/pg/ops/load/repro harnesses; CI runs the strongest suites — `test:pg`+`test:ops` (real pg), `test:live`, `test:e2e` (auth-ops: invite mgmt / password reset / sessions), `typecheck:server`; one-command `verify:full`. Mobile UI not machine-run (no Expo runtime) — auth + gateway logic proven via e2e + session/authClient/authSession gate tests |
 | Scalability | ~50 | DB indexed/efficient; SSE full-snapshot + unpaginated list are the ceilings |
 
 ## Performance baseline (Build 13, measured on real Postgres via `test:load`)

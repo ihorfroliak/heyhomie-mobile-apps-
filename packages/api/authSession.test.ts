@@ -130,6 +130,53 @@ async function main() {
         await throws('expired invitation rejected → 401', 'UNAUTHENTICATED', () => svc2.accept({ inviteToken: inv4.inviteToken, password: 'latepass11' }));
     }
 
+    // ── Build 24: auth operations (invitation mgmt, password reset, sessions) ──
+    {
+        let c = 3_000_000_000_000;
+        const repo3 = memoryAuthRepo();
+        const svc3 = makeAuthService(repo3, fakeCrypto(), { refreshTtlSec: 100_000, inviteTtlSec: 1000, resetTtlSec: 500, now: () => c });
+        const owner = await svc3.register({ email: 'own@x.com', password: 'ownerpass1' });
+
+        // invitation management: list / revoke / reject-after-revoke / cannot-revoke-accepted / role gate
+        const iv1 = await svc3.invite({ email: 'w1@x.com', role: 'worker' }, owner.identity);
+        const iv2 = await svc3.invite({ email: 'w2@x.com', role: 'admin' }, owner.identity);
+        const list1 = await svc3.listInvitations(owner.identity);
+        ok('list shows both invitations, never a token hash', list1.length === 2 && list1.every(i => !('tokenHash' in (i as object)) && i.status === 'pending'));
+        await svc3.revokeInvite(iv1.id, owner.identity);
+        ok('revoked invite shows status=revoked', (await svc3.listInvitations(owner.identity)).find(i => i.id === iv1.id)?.status === 'revoked');
+        await throws('accept after revoke rejected', 'UNAUTHENTICATED', () => svc3.accept({ inviteToken: iv1.inviteToken, password: 'w1pass123' }));
+        const w2 = await svc3.accept({ inviteToken: iv2.inviteToken, password: 'w2pass123' }); // admin
+        await throws('cannot revoke an accepted invitation', 'CONFLICT', () => svc3.revokeInvite(iv2.id, owner.identity));
+        ok('accepted invite shows status=accepted', (await svc3.listInvitations(owner.identity)).find(i => i.id === iv2.id)?.status === 'accepted');
+        const iv3 = await svc3.invite({ email: 'w3@x.com', role: 'worker' }, owner.identity);
+        const w3 = await svc3.accept({ inviteToken: iv3.inviteToken, password: 'w3pass123' }); // worker
+        await throws('worker cannot list invitations', 'FORBIDDEN', () => svc3.listInvitations(w3.identity));
+        ok('admin CAN list invitations', (await svc3.listInvitations(w2.identity)).length >= 1);
+
+        // password reset: unknown identical / confirm / single-use / old pw dead / new pw works / sessions revoked
+        ok('reset request for unknown email → null (no enumeration)', (await svc3.requestPasswordReset({ email: 'ghost@x.com' })) === null);
+        const rr = await svc3.requestPasswordReset({ email: 'own@x.com' });
+        ok('reset request for a real user → a token', !!rr && typeof rr.resetToken === 'string');
+        const ownerRefreshBefore = owner.refreshToken;
+        await svc3.confirmPasswordReset({ resetToken: rr!.resetToken, password: 'newownerpass1' });
+        await throws('reset token is single-use', 'UNAUTHENTICATED', () => svc3.confirmPasswordReset({ resetToken: rr!.resetToken, password: 'newownerpass1' }));
+        await throws('old password no longer works', 'UNAUTHENTICATED', () => svc3.login({ email: 'own@x.com', password: 'ownerpass1' }));
+        ok('new password works', (await svc3.login({ email: 'own@x.com', password: 'newownerpass1' })).identity.role === 'owner');
+        await throws('reset revoked pre-existing sessions (old refresh dead)', 'UNAUTHENTICATED', () => svc3.refresh(ownerRefreshBefore));
+
+        // sessions: two live → revoke one → other still refreshes → revoked rejected → cross-user forbidden
+        const su = await svc3.register({ email: 'sess@x.com', password: 'sesspass123', deviceLabel: 'Reg' });
+        const sPhone = await svc3.login({ email: 'sess@x.com', password: 'sesspass123', deviceLabel: 'Phone' });
+        const sess = await svc3.listSessions(su.identity);
+        ok('two live sessions listed with device labels', sess.length === 2 && sess.some(s => s.deviceLabel === 'Reg') && sess.some(s => s.deviceLabel === 'Phone'));
+        ok('session view never exposes a refresh token', sess.every(s => !('refreshHash' in (s as object))));
+        const regSessionId = sess.find(s => s.deviceLabel === 'Reg')!.id;
+        await svc3.revokeSessionById(regSessionId, su.identity);
+        await throws('revoked session refresh rejected', 'UNAUTHENTICATED', () => svc3.refresh(su.refreshToken));
+        ok('the OTHER session still works (revoke-one leaves the rest)', !!(await svc3.refresh(sPhone.refreshToken)).accessToken);
+        await throws('cannot revoke another user session', 'FORBIDDEN', () => svc3.revokeSessionById(regSessionId, owner.identity));
+    }
+
     console.log(`\n${passed} passed, ${fail.length} failed`);
     if (fail.length) { fail.forEach(f => console.log('  FAIL: ' + f)); process.exit(1); }
     console.log('All authSession tests passed.');

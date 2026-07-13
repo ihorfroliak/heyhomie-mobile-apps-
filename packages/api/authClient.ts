@@ -32,6 +32,10 @@ export interface AuthClientConfig {
 
 /** One-time invite an owner shares with a prospective member (Build 23). */
 export interface InviteTokenResult { id: string; inviteToken: string; email: string; role: 'admin' | 'worker'; expiresIn: number; }
+/** Client-safe invitation summary (Build 24) — no token hash. */
+export interface InvitationSummary { id: string; email: string; role: 'admin' | 'worker'; status: 'pending' | 'accepted' | 'revoked' | 'expired'; expiresAt: string; createdAt: string; }
+/** Client-safe session summary (Build 24) — no refresh token. */
+export interface SessionSummary { id: string; createdAt: string; lastUsedAt: string; deviceLabel: string | null; }
 
 export interface AuthClient {
     /** Current access token (sync) — feed to `httpOrderPort({ getToken })`. */
@@ -49,6 +53,19 @@ export interface AuthClient {
     invite(email: string, role: 'admin' | 'worker'): Promise<InviteTokenResult>;
     /** Invitee action: set a password once → logged in as the new member. */
     acceptInvite(inviteToken: string, password: string): Promise<void>;
+    // ── Auth operations (Build 24) ──
+    /** Owner/admin: list the tenant's invitations (no token hashes). */
+    listInvitations(): Promise<InvitationSummary[]>;
+    /** Owner: revoke a pending invitation by id. */
+    revokeInvitation(id: string): Promise<void>;
+    /** Public: request a password reset (no-op response whether the email exists). */
+    requestPasswordReset(email: string): Promise<void>;
+    /** Public: confirm a reset with the token + a new password (then re-login). */
+    confirmPasswordReset(resetToken: string, password: string): Promise<void>;
+    /** List the current user's own live sessions (no refresh tokens). */
+    listSessions(): Promise<SessionSummary[]>;
+    /** Revoke one of the current user's own sessions. */
+    revokeSession(id: string): Promise<void>;
 }
 
 export function createAuthClient(cfg: AuthClientConfig): AuthClient {
@@ -114,6 +131,33 @@ export function createAuthClient(cfg: AuthClientConfig): AuthClient {
             access = t.accessToken;
             await session.setTokens(t);
         },
+        // ── Auth operations (Build 24). Authenticated calls attach the bearer;
+        // authFetch transparently refreshes on 401. Password-reset is public. ──
+        async listInvitations() {
+            const res = await authFetch(`${base}/auth/invitations`, { headers: { authorization: `Bearer ${access}` } });
+            if (!res.ok) throw new UnauthorizedError('failed to list invitations');
+            return ((await res.json()) as { invitations: InvitationSummary[] }).invitations;
+        },
+        async revokeInvitation(id) {
+            const res = await authFetch(`${base}/auth/invitations/${encodeURIComponent(id)}/revoke`, { method: 'POST', headers: { authorization: `Bearer ${access}` } });
+            if (!res.ok) throw new UnauthorizedError('failed to revoke invitation');
+        },
+        async requestPasswordReset(email) {
+            await post('/auth/password-reset/request', { email }); // always 200 (enumeration-safe)
+        },
+        async confirmPasswordReset(resetToken, password) {
+            const res = await post('/auth/password-reset/confirm', { resetToken, password });
+            if (!res.ok) throw new UnauthorizedError('password reset failed');
+        },
+        async listSessions() {
+            const res = await authFetch(`${base}/auth/sessions`, { headers: { authorization: `Bearer ${access}` } });
+            if (!res.ok) throw new UnauthorizedError('failed to list sessions');
+            return ((await res.json()) as { sessions: SessionSummary[] }).sessions;
+        },
+        async revokeSession(id) {
+            const res = await authFetch(`${base}/auth/sessions/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { authorization: `Bearer ${access}` } });
+            if (!res.ok) throw new UnauthorizedError('failed to revoke session');
+        },
         async logout() {
             const rt = await session.getRefreshToken();
             if (rt) { try { await post('/auth/logout', { refreshToken: rt }); } catch { /* best-effort revoke */ } }
@@ -151,4 +195,10 @@ export const auth = {
     logout: () => need().logout(),
     invite: (email: string, role: 'admin' | 'worker') => need().invite(email, role),
     acceptInvite: (inviteToken: string, password: string) => need().acceptInvite(inviteToken, password),
+    listInvitations: () => need().listInvitations(),
+    revokeInvitation: (id: string) => need().revokeInvitation(id),
+    requestPasswordReset: (email: string) => need().requestPasswordReset(email),
+    confirmPasswordReset: (resetToken: string, password: string) => need().confirmPasswordReset(resetToken, password),
+    listSessions: () => need().listSessions(),
+    revokeSession: (id: string) => need().revokeSession(id),
 };

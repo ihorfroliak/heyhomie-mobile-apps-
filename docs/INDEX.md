@@ -45,7 +45,7 @@ Full diagram: [PROJECT_STATE.md §2](PROJECT_STATE.md).
 | [fakeBackend.ts](../packages/api/fakeBackend.ts) | In-process port over real `orderService` — lets contract test run http path w/o a server. |
 | [orderService.ts](../packages/api/orderService.ts) | Authoritative engine: transitions + tenant enforcement + repo-injected (`memoryOrderRepo`). |
 | [auth.ts](../packages/api/auth.ts) | Pure `AuthContext`, `FORBIDDEN_TENANT_ACCESS`, `requireOwned`. No crypto (RN-safe). |
-| [authSession.ts](../packages/api/authSession.ts) | Build 18/23: pure `makeAuthService` (`AuthRepo`+`AuthCrypto`) + `memoryAuthRepo`. register(→owner)/login/refresh/logout + **invite/accept/revokeInvite** (member invites); `Invitation` type. No crypto (RN-safe). |
+| [authSession.ts](../packages/api/authSession.ts) | Build 18/23/24: pure `makeAuthService` (`AuthRepo`+`AuthCrypto`) + `memoryAuthRepo`. register/login/refresh/logout + invite/accept/revokeInvite + **listInvitations, requestPasswordReset/confirmPasswordReset, listSessions/revokeSessionById** (`revokedReason` isolates revokes). Views omit token hashes. No crypto (RN-safe). |
 | [bookingStore.ts](../packages/api/bookingStore.ts) | PRIVATE mock store (AsyncStorage-durable). NOT exported from barrel. Don't import in UI. |
 | [index.ts](../packages/api/index.ts) | Barrel. Exports contract/gateway/auth/service/fake — NOT the store. |
 
@@ -83,7 +83,8 @@ Key ones: [catalog.ts](../packages/domain/catalog.ts) (services+details) ·
 | `client/app/_layout.tsx`, `admin/app/_layout.tsx` | Startup: `configureAuth` + `auth.bootstrap` + `orderGateway.init`; **route gate** → `/login` if unauthenticated (Build 21). |
 | `client/app/login.tsx`+`register.tsx`, `admin/app/login.tsx`, `worker/app/login.tsx` | Auth screens (shared `auth` client); logout wired in each app's profile. Build 21–22. |
 | `worker/app/(tabs)/missions.tsx`+`job/[id].tsx` | Build 22: worker jobs list + detail on `orderGateway` (Order model, `completeOrder`, no price). |
-| `admin/app/invite.tsx`, `worker/app/accept-invite.tsx` | Build 23: owner Invite-member (one-time token) + invitee Accept-invite (set password once). |
+| `admin/app/invite.tsx`+`invitations.tsx`, `worker/app/accept-invite.tsx` | Build 23/24: owner Invite-member, invitation list+revoke, invitee Accept-invite. |
+| `client/app/password-reset.tsx` | Build 24: request + confirm password reset (enumeration-safe); linked from client login. |
 | `client/lib/store.ts`, `admin/lib/store.ts`, `worker/lib/store.ts` | `secureStore` = **expo-secure-store** (encrypted tokens) behind the `SecureStore` interface (Build 21–22). |
 
 ### UI kit / design
@@ -136,8 +137,10 @@ storage (expo-secure-store); security review. **22** worker backend integration 
 worker off mock onto `orderGateway` (jobs list + `job/[id]` + `completeOrder`), auth
 gate + login, no contract change; e2e worker-device flow. **23** member invites &
 per-user accounts — owner invites admin/worker (one-time token, migration v6
-`invitations`, `/auth/{invite,accept-invite}`); one tenant → many users; no contract
-change. Every "verified" build surfaced ≥1 real defect only reachable
+`invitations`, `/auth/{invite,accept-invite}`); one tenant → many users. **24** auth
+operations & account lifecycle — invitation list/revoke, password reset, session
+management (migration v7; `revokedReason` isolates revokes); no contract change.
+Every "verified" build surfaced ≥1 real defect only reachable
 by executing the real path — details + measured evidence in [BUILD_HISTORY.md](BUILD_HISTORY.md).
 
 ## Hard rules (do not violate)

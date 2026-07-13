@@ -31,6 +31,11 @@ export interface User {
     createdAt: string; // ISO
 }
 
+/** Why a session was revoked (Build 24). `rotated` = consumed by a refresh (a
+ *  replay of it is theft → nuke the family); `revoked` = deliberately killed
+ *  (logout / user-revoked / password-reset) → a replay is just dead, NOT theft. */
+export type RevokedReason = 'rotated' | 'revoked';
+
 /** A refresh session — a server-side, revocable record. `refreshHash` is the
  *  sha256 of the opaque refresh token (the raw token never touches storage). */
 export interface AuthSession {
@@ -41,7 +46,40 @@ export interface AuthSession {
     refreshHash: string;
     expiresAt: string; // ISO
     createdAt: string; // ISO
+    lastUsedAt: string; // ISO — refreshed each rotation (Build 24)
+    deviceLabel: string | null; // optional client-supplied label (Build 24)
     revokedAt: string | null; // ISO or null (kept after rotation → reuse detection)
+    revokedReason: RevokedReason | null;
+}
+
+/** Client-safe session summary (Build 24) — NEVER includes the refresh hash. */
+export interface SessionView {
+    id: string;
+    createdAt: string;
+    lastUsedAt: string;
+    deviceLabel: string | null;
+}
+
+/** Client-safe invitation summary (Build 24) — NEVER includes the token hash. */
+export interface InvitationView {
+    id: string;
+    email: string;
+    role: InviteRole;
+    status: 'pending' | 'accepted' | 'revoked' | 'expired';
+    expiresAt: string;
+    createdAt: string;
+}
+
+/** A password-reset offer (Build 24): opaque random token, sha256-stored,
+ *  expiring, single-use. Never reveals whether the email exists. */
+export interface PasswordReset {
+    id: string;
+    userId: string;
+    email: string;
+    tokenHash: string;
+    expiresAt: string; // ISO
+    createdAt: string; // ISO
+    usedAt: string | null;
 }
 
 /** What an issuer hands back to a client. `expiresIn` = access-token TTL seconds. */
@@ -89,15 +127,23 @@ export interface AuthRepo {
     insertUser(u: User): Promise<void>;
     insertSession(s: AuthSession): Promise<void>;
     findSessionByRefreshHash(hash: string): Promise<AuthSession | undefined>;
-    revokeSession(id: string, at: string): Promise<void>;
-    /** Theft response: revoke every (still-live) session for a user. */
-    revokeAllUserSessions(userId: string, at: string): Promise<void>;
-    // Invitations (Build 23).
+    findSessionById(id: string): Promise<AuthSession | undefined>;
+    listSessionsByUser(userId: string): Promise<AuthSession[]>;
+    revokeSession(id: string, at: string, reason: RevokedReason): Promise<void>;
+    /** Theft / global response: revoke every (still-live) session for a user. */
+    revokeAllUserSessions(userId: string, at: string, reason: RevokedReason): Promise<void>;
+    // Invitations (Build 23/24).
     insertInvitation(inv: Invitation): Promise<void>;
     findInvitationByTokenHash(hash: string): Promise<Invitation | undefined>;
     findInvitationById(id: string): Promise<Invitation | undefined>;
+    listInvitationsByTenant(tenantId: string): Promise<Invitation[]>;
     markInvitationAccepted(id: string, at: string): Promise<void>;
     revokeInvitation(id: string, at: string): Promise<void>;
+    // Password reset + password change (Build 24).
+    updateUserPassword(userId: string, hash: string, salt: string): Promise<void>;
+    insertPasswordReset(pr: PasswordReset): Promise<void>;
+    findPasswordResetByTokenHash(hash: string): Promise<PasswordReset | undefined>;
+    markPasswordResetUsed(id: string, at: string): Promise<void>;
 }
 
 /** Crypto port — the ONLY place node:crypto is used (server-side impl). Injected
@@ -119,14 +165,17 @@ export interface AuthCrypto {
 export interface AuthServiceOptions {
     refreshTtlSec: number;
     inviteTtlSec?: number; // default 7 days — how long an invitation stays acceptable
+    resetTtlSec?: number; // default 1 hour — how long a password-reset token is valid
     now?: () => number; // epoch ms (default Date.now) — injected for expiry tests
     minPasswordLength?: number; // default 8
 }
 
-export interface RegisterInput { email: string; password: string; }
-export interface LoginInput { email: string; password: string; }
+export interface RegisterInput { email: string; password: string; deviceLabel?: string }
+export interface LoginInput { email: string; password: string; deviceLabel?: string }
 export interface InviteInput { email: string; role: InviteRole; }
-export interface AcceptInviteInput { inviteToken: string; password: string; }
+export interface AcceptInviteInput { inviteToken: string; password: string; deviceLabel?: string }
+export interface PasswordResetRequestInput { email: string; }
+export interface PasswordResetConfirmInput { resetToken: string; password: string; }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -161,6 +210,18 @@ export interface AuthService {
     accept(input: AcceptInviteInput): Promise<AuthTokens>;
     /** Owner cancels a still-pending invitation in their tenant. */
     revokeInvite(inviteId: string, auth: AuthContext): Promise<void>;
+    // ── Auth operations (Build 24) ──
+    /** Owner/admin: list their tenant's invitations (no token hashes). */
+    listInvitations(auth: AuthContext): Promise<InvitationView[]>;
+    /** Request a password reset. Returns the token to deliver out-of-band (email),
+     *  or null if no such user — the CALLER must respond identically either way. */
+    requestPasswordReset(input: PasswordResetRequestInput): Promise<{ resetToken: string; email: string } | null>;
+    /** Confirm a reset: set the new password + revoke ALL sessions (fresh login). */
+    confirmPasswordReset(input: PasswordResetConfirmInput): Promise<void>;
+    /** List the CURRENT user's own live sessions (no refresh tokens). */
+    listSessions(auth: AuthContext): Promise<SessionView[]>;
+    /** Revoke one of the current user's OWN sessions (never another user's). */
+    revokeSessionById(sessionId: string, auth: AuthContext): Promise<void>;
 }
 
 /**
@@ -171,10 +232,13 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
     const now = opts.now ?? (() => Date.now());
     const minPw = opts.minPasswordLength ?? 8;
     const inviteTtlSec = opts.inviteTtlSec ?? 604_800; // 7 days
+    const resetTtlSec = opts.resetTtlSec ?? 3_600; // 1 hour
     const iso = (ms: number) => new Date(ms).toISOString();
+    const deviceLabelOf = (raw: unknown): string | null =>
+        typeof raw === 'string' && raw.trim() ? raw.trim().slice(0, 100) : null;
 
     /** Create a fresh refresh session for an identity + mint the access token. */
-    async function issue(identity: AuthContext): Promise<AuthTokens> {
+    async function issue(identity: AuthContext, deviceLabel: string | null = null): Promise<AuthTokens> {
         const t = now();
         const { token: refreshToken, hash: refreshHash } = crypto.newRefresh();
         const session: AuthSession = {
@@ -185,7 +249,10 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             refreshHash,
             expiresAt: iso(t + opts.refreshTtlSec * 1000),
             createdAt: iso(t),
+            lastUsedAt: iso(t),
+            deviceLabel,
             revokedAt: null,
+            revokedReason: null,
         };
         await repo.insertSession(session);
         const access = crypto.mintAccess(identity);
@@ -210,7 +277,7 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
                 createdAt: iso(now()),
             };
             await repo.insertUser(user);
-            return issue({ userId: user.id, tenantId: user.tenantId, role: user.role });
+            return issue({ userId: user.id, tenantId: user.tenantId, role: user.role }, deviceLabelOf(input.deviceLabel));
         },
 
         async login(input) {
@@ -222,7 +289,7 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             // check gates the result, not whether the crypto work happens.
             const okPw = crypto.verifyPassword(password, user?.passwordHash ?? DECOY_HASH, user?.passwordSalt ?? DECOY_SALT);
             if (!user || !okPw) throw new UnauthorizedError('invalid credentials');
-            return issue({ userId: user.id, tenantId: user.tenantId, role: user.role });
+            return issue({ userId: user.id, tenantId: user.tenantId, role: user.role }, deviceLabelOf(input.deviceLabel));
         },
 
         async refresh(refreshToken) {
@@ -231,26 +298,31 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             const session = await repo.findSessionByRefreshHash(hash);
             const t = now();
             if (!session) throw new UnauthorizedError('invalid refresh token');
-            // Reuse of an already-rotated (revoked) token = theft signal → nuke the
-            // whole session family so the attacker AND victim are logged out.
             if (session.revokedAt) {
-                await repo.revokeAllUserSessions(session.userId, iso(t));
-                throw new UnauthorizedError('refresh token reuse detected');
+                // Replay of a ROTATED token = theft → nuke the whole family. A token
+                // for a DELIBERATELY-revoked session (logout / user-killed / reset) is
+                // simply dead — reject it alone, so revoking one device leaves the rest.
+                if (session.revokedReason === 'rotated') {
+                    await repo.revokeAllUserSessions(session.userId, iso(t), 'revoked');
+                    throw new UnauthorizedError('refresh token reuse detected');
+                }
+                throw new UnauthorizedError('invalid refresh token');
             }
             if (new Date(session.expiresAt).getTime() <= t) {
-                await repo.revokeSession(session.id, iso(t));
+                await repo.revokeSession(session.id, iso(t), 'revoked');
                 throw new UnauthorizedError('refresh token expired');
             }
-            // Single-use rotation: revoke the presented session, issue a fresh one.
-            await repo.revokeSession(session.id, iso(t));
-            return issue({ userId: session.userId, tenantId: session.tenantId, role: session.role });
+            // Single-use rotation: revoke the presented session, issue a fresh one
+            // (carrying its device label forward).
+            await repo.revokeSession(session.id, iso(t), 'rotated');
+            return issue({ userId: session.userId, tenantId: session.tenantId, role: session.role }, session.deviceLabel);
         },
 
         async logout(refreshToken) {
             // Idempotent: unknown/blank token is a no-op (client is signed out either way).
             if (typeof refreshToken !== 'string' || !refreshToken) return;
             const session = await repo.findSessionByRefreshHash(crypto.hashRefresh(refreshToken));
-            if (session && !session.revokedAt) await repo.revokeSession(session.id, iso(now()));
+            if (session && !session.revokedAt) await repo.revokeSession(session.id, iso(now()), 'revoked');
         },
 
         async invite(input, auth) {
@@ -298,7 +370,7 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             };
             await repo.insertUser(user); // unique-email enforced (ConflictError on race)
             await repo.markInvitationAccepted(inv.id, iso(t)); // single-use
-            return issue({ userId: user.id, tenantId: user.tenantId, role: user.role });
+            return issue({ userId: user.id, tenantId: user.tenantId, role: user.role }, deviceLabelOf(input.deviceLabel));
         },
 
         async revokeInvite(inviteId, auth) {
@@ -306,7 +378,60 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             const inv = await repo.findInvitationById(inviteId);
             // Deny-by-default + tenant isolation: a cross-tenant id is treated as not-found.
             if (!inv || inv.tenantId !== auth.tenantId) throw new ForbiddenError('invitation not found');
-            if (!inv.revokedAt && !inv.acceptedAt) await repo.revokeInvitation(inv.id, iso(now()));
+            if (inv.acceptedAt) throw new ConflictError('cannot revoke an accepted invitation');
+            if (!inv.revokedAt) await repo.revokeInvitation(inv.id, iso(now()));
+        },
+
+        async listInvitations(auth) {
+            // Owner or admin may see the tenant's roster of invites; workers/members may not.
+            if (auth.role !== 'owner' && auth.role !== 'admin') throw new ForbiddenError('insufficient role');
+            const t = now();
+            const status = (inv: Invitation): InvitationView['status'] =>
+                inv.acceptedAt ? 'accepted' : inv.revokedAt ? 'revoked' : new Date(inv.expiresAt).getTime() <= t ? 'expired' : 'pending';
+            return (await repo.listInvitationsByTenant(auth.tenantId)).map(inv => ({
+                id: inv.id, email: inv.email, role: inv.role, status: status(inv), expiresAt: inv.expiresAt, createdAt: inv.createdAt,
+            })); // NB: tokenHash is intentionally never projected
+        },
+
+        async requestPasswordReset(input) {
+            const email = normalizeEmail(input.email);
+            const user = await repo.findUserByEmail(email);
+            // Enumeration-safe: always do the same shape of work; only mint+persist a
+            // token when the user exists. The CALLER responds identically either way.
+            if (!user) return null;
+            const t = now();
+            const { token: resetToken, hash: tokenHash } = crypto.newRefresh(); // opaque random + sha256
+            await repo.insertPasswordReset({
+                id: crypto.newId(), userId: user.id, email: user.email, tokenHash,
+                expiresAt: iso(t + resetTtlSec * 1000), createdAt: iso(t), usedAt: null,
+            });
+            return { resetToken, email: user.email };
+        },
+
+        async confirmPasswordReset(input) {
+            if (typeof input.resetToken !== 'string' || !input.resetToken) throw new UnauthorizedError('invalid reset token');
+            const password = requirePassword(input.password, minPw);
+            const pr = await repo.findPasswordResetByTokenHash(crypto.hashRefresh(input.resetToken));
+            const t = now();
+            if (!pr || pr.usedAt || new Date(pr.expiresAt).getTime() <= t) throw new UnauthorizedError('invalid or expired reset token');
+            const { hash, salt } = crypto.hashPassword(password);
+            await repo.updateUserPassword(pr.userId, hash, salt);
+            await repo.markPasswordResetUsed(pr.id, iso(t)); // single-use
+            // Force a fresh login everywhere: revoke every existing session.
+            await repo.revokeAllUserSessions(pr.userId, iso(t), 'revoked');
+        },
+
+        async listSessions(auth) {
+            const live = (await repo.listSessionsByUser(auth.userId)).filter(s => !s.revokedAt);
+            return live.map(s => ({ id: s.id, createdAt: s.createdAt, lastUsedAt: s.lastUsedAt, deviceLabel: s.deviceLabel }));
+        },
+
+        async revokeSessionById(sessionId, auth) {
+            const s = await repo.findSessionById(sessionId);
+            // Ownership is by userId — even an owner/admin cannot touch another user's
+            // session. A missing / other-user id is denied identically (no leak).
+            if (!s || s.userId !== auth.userId) throw new ForbiddenError('session not found');
+            if (!s.revokedAt) await repo.revokeSession(s.id, iso(now()), 'revoked');
         },
     };
 }
@@ -319,6 +444,8 @@ export function memoryAuthRepo(): AuthRepo {
     const sessionsByHash = new Map<string, AuthSession>();
     const invitesById = new Map<string, Invitation>();
     const invitesByHash = new Map<string, Invitation>();
+    const resetsById = new Map<string, PasswordReset>();
+    const resetsByHash = new Map<string, PasswordReset>();
     return {
         async findUserByEmail(email) { return usersByEmail.get(email); },
         async findUserById(id) { return usersById.get(id); },
@@ -327,17 +454,23 @@ export function memoryAuthRepo(): AuthRepo {
             usersById.set(u.id, u);
             usersByEmail.set(u.email, u);
         },
+        async updateUserPassword(userId, hash, salt) {
+            const u = usersById.get(userId);
+            if (u) { u.passwordHash = hash; u.passwordSalt = salt; }
+        },
         async insertSession(s) {
             sessionsById.set(s.id, s);
             sessionsByHash.set(s.refreshHash, s);
         },
         async findSessionByRefreshHash(hash) { return sessionsByHash.get(hash); },
-        async revokeSession(id, at) {
+        async findSessionById(id) { return sessionsById.get(id); },
+        async listSessionsByUser(userId) { return [...sessionsById.values()].filter(s => s.userId === userId); },
+        async revokeSession(id, at, reason) {
             const s = sessionsById.get(id);
-            if (s && !s.revokedAt) s.revokedAt = at;
+            if (s && !s.revokedAt) { s.revokedAt = at; s.revokedReason = reason; }
         },
-        async revokeAllUserSessions(userId, at) {
-            for (const s of sessionsById.values()) if (s.userId === userId && !s.revokedAt) s.revokedAt = at;
+        async revokeAllUserSessions(userId, at, reason) {
+            for (const s of sessionsById.values()) if (s.userId === userId && !s.revokedAt) { s.revokedAt = at; s.revokedReason = reason; }
         },
         async insertInvitation(inv) {
             invitesById.set(inv.id, inv);
@@ -345,6 +478,7 @@ export function memoryAuthRepo(): AuthRepo {
         },
         async findInvitationByTokenHash(hash) { return invitesByHash.get(hash); },
         async findInvitationById(id) { return invitesById.get(id); },
+        async listInvitationsByTenant(tenantId) { return [...invitesById.values()].filter(i => i.tenantId === tenantId); },
         async markInvitationAccepted(id, at) {
             const inv = invitesById.get(id);
             if (inv && !inv.acceptedAt) inv.acceptedAt = at;
@@ -352,6 +486,15 @@ export function memoryAuthRepo(): AuthRepo {
         async revokeInvitation(id, at) {
             const inv = invitesById.get(id);
             if (inv && !inv.revokedAt) inv.revokedAt = at;
+        },
+        async insertPasswordReset(pr) {
+            resetsById.set(pr.id, pr);
+            resetsByHash.set(pr.tokenHash, pr);
+        },
+        async findPasswordResetByTokenHash(hash) { return resetsByHash.get(hash); },
+        async markPasswordResetUsed(id, at) {
+            const pr = resetsById.get(id);
+            if (pr && !pr.usedAt) pr.usedAt = at;
         },
     };
 }

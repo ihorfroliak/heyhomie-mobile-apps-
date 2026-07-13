@@ -57,7 +57,9 @@ function sseShim(url: string) {
 async function main() {
     const AUTH_SECRET = 'e2e-test-secret-16chars-min';
     // Real server: real auth crypto (scrypt/HMAC), memory repos, real socket.
-    const config = loadServerConfig({ DATABASE_URL: 'postgres://unused/e2e', AUTH_SECRET, PORT: '8092' });
+    // AUTH_DEV_MODE=1 so /auth/password-reset/request echoes the token (local only,
+    // same gate as /dev/token) — lets the e2e complete the reset flow without email.
+    const config = loadServerConfig({ DATABASE_URL: 'postgres://unused/e2e', AUTH_SECRET, PORT: '8092', AUTH_DEV_MODE: '1' });
     const authDeps = { repo: memoryAuthRepo(), crypto: makeAuthCrypto(AUTH_SECRET, config.accessTtlSec) };
     const { app } = buildApp(config, memoryOrderRepo(), async () => { /* memory db up */ }, authDeps);
     await app.listen({ port: 0, host: '127.0.0.1' });
@@ -145,6 +147,42 @@ async function main() {
     try { await member.invite('nope@e2e.pl', 'worker'); } catch { ownerOnly = true; }
     ok('invited worker cannot invite (owner-only) over HTTP', ownerOnly);
     await member.logout();
+
+    // ── Build 24: auth operations over HTTP ──
+    const jh = { 'content-type': 'application/json' };
+    // invitation management: list → revoke → accept-after-revoke rejected
+    const inv24 = await authClient.invite('mgmt@e2e.pl', 'worker');
+    const invList = await authClient.listInvitations();
+    ok('owner lists invitations (no token hashes)', invList.some(i => i.id === inv24.id) && invList.every(i => !('tokenHash' in (i as object))));
+    await authClient.revokeInvitation(inv24.id);
+    ok('revoked invitation shows status revoked in the list', (await authClient.listInvitations()).find(i => i.id === inv24.id)?.status === 'revoked');
+    let revokedRejected = false;
+    try { await createAuthClient({ baseUrl: base, store: memorySecureStore() }).acceptInvite(inv24.inviteToken, 'WhateverPass1'); } catch { revokedRejected = true; }
+    ok('accepting a revoked invitation is rejected over HTTP', revokedRejected);
+
+    // sessions: owner has >=1 live session; list never exposes refresh tokens
+    const ownerSessions = await authClient.listSessions();
+    ok('owner lists own sessions (no refresh tokens)', ownerSessions.length >= 1 && ownerSessions.every(s => !('refreshHash' in (s as object))));
+
+    // password reset over HTTP (dev echoes the token): unknown identical → confirm →
+    // old refresh dead → old pw fails → new pw works
+    const resetStore = memorySecureStore();
+    const resetUser = createAuthClient({ baseUrl: base, store: resetStore });
+    await resetUser.register('reset@e2e.pl', 'ResetOldPass1');
+    const reqRes = await (await fetch(`${base}/auth/password-reset/request`, { method: 'POST', headers: jh, body: JSON.stringify({ email: 'reset@e2e.pl' }) })).json() as { resetToken?: string };
+    ok('dev-mode reset request echoes a token for a real user', typeof reqRes.resetToken === 'string');
+    const ghost = await fetch(`${base}/auth/password-reset/request`, { method: 'POST', headers: jh, body: JSON.stringify({ email: 'ghost@e2e.pl' }) });
+    ok('unknown email → identical 200 with no token (no enumeration)', ghost.status === 200 && !((await ghost.json()) as { resetToken?: string }).resetToken);
+    const oldRefresh = await resetStore.getItem('heyhomie.auth.refresh');
+    await resetUser.confirmPasswordReset(reqRes.resetToken as string, 'ResetNewPass1');
+    const oldRefreshStatus = (await fetch(`${base}/auth/refresh`, { method: 'POST', headers: jh, body: JSON.stringify({ refreshToken: oldRefresh }) })).status;
+    ok('reset revoked the old refresh session (401)', oldRefreshStatus === 401);
+    let oldPwFailed = false;
+    try { await createAuthClient({ baseUrl: base, store: memorySecureStore() }).login('reset@e2e.pl', 'ResetOldPass1'); } catch { oldPwFailed = true; }
+    ok('old password no longer logs in after reset', oldPwFailed);
+    const newLogin = createAuthClient({ baseUrl: base, store: memorySecureStore() });
+    await newLogin.login('reset@e2e.pl', 'ResetNewPass1');
+    ok('new password logs in after reset', typeof newLogin.getToken() === 'string');
 
     // 7) LOGOUT → tokens gone → requests rejected
     await authClient.logout();
