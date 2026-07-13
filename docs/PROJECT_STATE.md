@@ -108,9 +108,10 @@ UI (apps/*)  ──imports only──►  orderGateway  (packages/api/orderContr
   + opaque **refresh token** (sha256-hashed at rest, single-use rotation, reuse → revoke family).
   Server: `authCrypto.ts` (node:crypto) + `pgAuthRepo.ts`; migration v5 (`users`+`auth_sessions`).
   Replaces dev-only `/dev/token` as the issuer. Contract + access-token format unchanged.
-- **Client auth (Build 20/21)**: `authClient.ts` (sync `getToken`, `authFetch` refresh-on-401,
-  login/register/refresh/logout/bootstrap); apps have login/register/logout screens + a route
-  gate; tokens live in **expo-secure-store** (Keychain/Keystore). Apps never see role/tenant.
+- **Client auth (Build 20/21/22)**: `authClient.ts` (sync `getToken`, `authFetch` refresh-on-401,
+  login/register/refresh/logout/bootstrap); **all three apps** (client/admin/worker) authenticate
+  + gate to `/login` + consume `orderGateway`; tokens live in **expo-secure-store**. Apps never
+  see role/tenant. Worker (Build 22) shows tenant jobs (Order model) + `completeOrder`, no price.
 - DB: `orders.tenant_id` NOT NULL + indexed, pinned on update. `users` (email UNIQUE, scrypt)
   + `auth_sessions` (refresh_hash UNIQUE, expires_at, revoked_at) — Build 18.
 

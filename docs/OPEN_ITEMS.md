@@ -12,13 +12,13 @@ Grouped by whether it's a future code change, an intentional trade-off, or exter
    10-min TTL store → identical retry/double-tap returns the same order. Additive,
    no contract change. (`packages/api/idempotency.ts`, `server/src/routes.ts`.)
 3. **Auth: additional issuers + lifecycle** (foundation Build 18, client wiring
-   Build 20, mobile UX + encrypted storage Build 21 — login/register/logout screens,
-   route gate, expo-secure-store). Future: SMS-OTP / OAuth issuers; **member invites**
-   (self-register only makes a tenant-owning admin); password reset; periodic GC for
-   expired/revoked `auth_sessions` rows; **wire the worker app** to the backend +
-   its own login gate (worker is offline today — no `orderGateway.init`/auth); a
-   reactive auth-state store if screens need to observe login/logout live (today the
-   gate + screens navigate imperatively, mirroring the consent gate).
+   Build 20, mobile UX + encrypted storage Build 21, worker backend integration
+   Build 22 — all three apps now authenticate + consume the gateway). Future:
+   SMS-OTP / OAuth issuers; **member invites** (self-register only makes a
+   tenant-owning admin, so worker/admin log in as the tenant account today — invites
+   give per-person accounts); password reset; periodic GC for expired/revoked
+   `auth_sessions` rows; a reactive auth-state store if screens ever need to observe
+   login/logout live (today the gates navigate imperatively, mirroring the consent gate).
 4. **Real payment/notification transport** — `notifyClient` is a console mock; Stripe
    + Fakturownia + email/SMS adapters are seams (`accountingClient`/`marketingClient`
    are mock/legacy). Wire when credentials exist.
@@ -40,6 +40,10 @@ Grouped by whether it's a future code change, an intentional trade-off, or exter
 - **Full-snapshot SSE / single-instance rate-limit**: correct at pilot scale;
   horizontal scale needs `LISTEN/NOTIFY` + shared limiter store.
 - **`tsx` runtime in the image** (no precompile): 61ms boot — fine for MVP.
+- **Worker demo dashboard** (Build 22): the jobs flow (`(tabs)/missions` + `job/[id]`)
+  is live on the gateway; the secondary dashboard tabs (`index`/`earnings`/`schedule`
+  + the old `mission/[id]`) still render demo `Mission` data. Migrate to gateway/domain
+  data when those views become production surfaces — not a defect (informational tiles).
 - **httpOrderGateway in-memory cache survives logout** until app restart or the next
   SSE snapshot (Build 21 security review). NOT rendered on the auth screens and NOT a
   cross-tenant leak (a same-device re-login gets a fresh tenant snapshot; a tokenless

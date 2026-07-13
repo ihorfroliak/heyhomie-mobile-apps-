@@ -14,7 +14,7 @@ Latest build → [BUILD_HISTORY.md](BUILD_HISTORY.md). Gate (`npm run check`): a
 | Deployment | 85 | docker build + compose healthy + restart verified; non-root, reproducible build |
 | Infrastructure | 78 | containerized stack proven; single-instance (multi-instance needs shared state) |
 | Maintainability | 87 | clean layering, anti-dep guard, frozen contract, docs; server typecheck now clean + gated (Build 19) |
-| Testability | 94 | 684 gated assertions + live/e2e/pg/ops/load/repro harnesses; CI runs the strongest suites — `test:pg`+`test:ops` (real pg), `test:live`, `test:e2e` (full app journey incl. fresh-start rejection), `typecheck:server`; one-command `verify:full`. Mobile UI not machine-run (no Expo runtime) — auth logic proven via e2e + session/authClient gate tests |
+| Testability | 94 | 684 gated assertions + live/e2e/pg/ops/load/repro harnesses; CI runs the strongest suites — `test:pg`+`test:ops` (real pg), `test:live`, `test:e2e` (client + worker-device journeys incl. fresh-start rejection), `typecheck:server`; one-command `verify:full`. Mobile UI not machine-run (no Expo runtime) — auth + gateway logic proven via e2e + session/authClient gate tests |
 | Scalability | ~50 | DB indexed/efficient; SSE full-snapshot + unpaginated list are the ceilings |
 
 ## Performance baseline (Build 13, measured on real Postgres via `test:load`)
@@ -37,7 +37,7 @@ clients ≈7MB/client, broadcast ≈6.8s at 5.5k orders (the full-snapshot scale
 Bottlenecks = unpaginated list + full-snapshot SSE (both contract-versioned work — see [OPEN_ITEMS.md](OPEN_ITEMS.md)).
 
 ## CODE COMPLETE (verified in-repo)
-Domain rules, OrderGateway contract + both adapters, authoritative `orderService` (CAS, tenant), auth+HMAC + **credential issuer** (`/auth/*`: scrypt, access+refresh, rotation/reuse-detection — Build 18), **client integration** (env-selected gateway + `authClient` — Build 20), **mobile auth UX** (login/register/logout + route gate + expo-secure-store — Build 21), Fastify server (routes/SSE/metrics/migrations/graceful-shutdown), Docker image + compose. Proven on real Postgres 16 + real HTTP + real docker signals + a real end-to-end app journey (`test:e2e`).
+Domain rules, OrderGateway contract + both adapters, authoritative `orderService` (CAS, tenant), auth+HMAC + **credential issuer** (`/auth/*`: scrypt, access+refresh, rotation/reuse-detection — Build 18), **client integration** (env-selected gateway + `authClient` — Build 20), **mobile auth UX** (login/register/logout + route gate + expo-secure-store — Build 21) across **all three apps** (worker on the gateway — Build 22), Fastify server (routes/SSE/metrics/migrations/graceful-shutdown), Docker image + compose. Proven on real Postgres 16 + real HTTP + real docker signals + a real end-to-end app journey (`test:e2e`).
 
 ## INFRASTRUCTURE PENDING (external — not repo defects)
 - TLS / DNS / hosting; reverse proxy + `TRUST_PROXY=1` (real client IP); managed Postgres.

@@ -110,6 +110,25 @@ async function main() {
     const created2 = await gateway.submitOrder({ contact: { phone: '600222333' }, cityId: 'warszawa', serviceId: 'office_cleaning' });
     ok('mutations keep working after refresh', await until(() => gateway.ordersSnapshot().some(o => o.id === created2.draft.id)));
 
+    // ── WORKER DEVICE (Build 22): its own authClient + gateway, same tenant ──
+    // The worker app is a separate client instance (own token store) that logs in,
+    // sees the tenant's assigned jobs, completes one, and observes it settle to paid.
+    const noopKv = { getItem: async () => null, setItem: async () => {}, removeItem: async () => {} };
+    const workerClient = createAuthClient({ baseUrl: base, store: memorySecureStore() });
+    await workerClient.login('owner@e2e.pl', 'Sup3rSecret!');
+    ok('worker login yields a token', typeof workerClient.getToken() === 'string');
+    const workerGw = makeHttpOrderGateway(httpOrderPort({ baseUrl: base, getToken: workerClient.getToken, fetchImpl: workerClient.authFetch, eventSource: sseShim as never, timeoutMs: 4000 }));
+    await workerGw.init(noopKv);
+    const jobId = created2.draft.id;
+    ok('worker fetches the assigned job over SSE (confirmed)', await until(() => workerGw.ordersSnapshot().some(o => o.id === jobId && o.status === 'confirmed')));
+    workerGw.completeOrder(jobId, '2025-06-03T10:00:00.000Z'); // worker marks the job done
+    ok('worker status update propagates (completed)', await until(() => workerGw.ordersSnapshot().find(o => o.id === jobId)?.status === 'completed'));
+    await gateway.settleOrder(jobId, '2025-06-03T12:00:00.000Z'); // client/admin settles payment
+    ok('worker sees the paid confirmation', await until(() => workerGw.ordersSnapshot().find(o => o.id === jobId)?.status === 'paid'));
+    await workerClient.logout();
+    ok('worker logout clears its token', workerClient.getToken() === undefined);
+    ok('worker request rejected after logout (401)', (await workerClient.authFetch(`${base}/orders`, {})).status === 401);
+
     // 7) LOGOUT → tokens gone → requests rejected
     await authClient.logout();
     ok('logout clears the access token', authClient.getToken() === undefined);
