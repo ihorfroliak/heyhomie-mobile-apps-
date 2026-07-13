@@ -11,14 +11,13 @@ Grouped by whether it's a future code change, an intentional trade-off, or exter
    content-hash `Idempotency-Key`; server dedups create by `(tenantId, key)` in a
    10-min TTL store → identical retry/double-tap returns the same order. Additive,
    no contract change. (`packages/api/idempotency.ts`, `server/src/routes.ts`.)
-3. **Auth: additional issuers + lifecycle** (foundation Build 18, client wiring
-   Build 20, mobile UX + encrypted storage Build 21, worker backend integration
-   Build 22 — all three apps now authenticate + consume the gateway). Future:
-   SMS-OTP / OAuth issuers; **member invites** (self-register only makes a
-   tenant-owning admin, so worker/admin log in as the tenant account today — invites
-   give per-person accounts); password reset; periodic GC for expired/revoked
-   `auth_sessions` rows; a reactive auth-state store if screens ever need to observe
-   login/logout live (today the gates navigate imperatively, mirroring the consent gate).
+3. **Auth: additional issuers + lifecycle** (foundation Build 18, client Build 20,
+   mobile UX Build 21, worker Build 22, **member invites + per-user accounts Build 23** —
+   owner invites admin/worker via one-time tokens; `/auth/{invite,accept-invite}`). Future:
+   SMS-OTP / OAuth issuers; password reset; **a revoke-invite + list-invites endpoint** (the
+   `AuthService.revokeInvite` capability + repo exist and are gate-tested; only the HTTP route
+   is unwired); periodic GC for expired/revoked `auth_sessions` + `invitations` rows; a
+   reactive auth-state store if screens ever need to observe login/logout live.
 4. **Real payment/notification transport** — `notifyClient` is a console mock; Stripe
    + Fakturownia + email/SMS adapters are seams (`accountingClient`/`marketingClient`
    are mock/legacy). Wire when credentials exist.

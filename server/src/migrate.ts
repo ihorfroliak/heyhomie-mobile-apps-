@@ -82,6 +82,27 @@ const MIGRATIONS: Migration[] = [
             );
             CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions (user_id);`,
     },
+    {
+        // Build 23 — member invitations. One tenant → many users: an owner invites
+        // a member (admin/worker); the one-time token (sha256, UNIQUE) is single-use,
+        // expiring and revocable. Additive; does not touch orders/users/auth_sessions.
+        version: 6,
+        name: 'invitations',
+        sql: `
+            CREATE TABLE IF NOT EXISTS invitations (
+                id           text PRIMARY KEY,
+                tenant_id    text        NOT NULL,
+                email        text        NOT NULL,
+                role         text        NOT NULL,
+                token_hash   text        NOT NULL UNIQUE,
+                invited_by   text        NOT NULL,
+                expires_at   timestamptz NOT NULL,
+                created_at   timestamptz NOT NULL DEFAULT now(),
+                accepted_at  timestamptz,
+                revoked_at   timestamptz
+            );
+            CREATE INDEX IF NOT EXISTS invitations_tenant_idx ON invitations (tenant_id);`,
+    },
 ];
 
 export async function runMigrations(pool: Pool): Promise<number[]> {

@@ -49,6 +49,11 @@ export class UnauthorizedError extends AppError {
 export class ForbiddenTenantError extends AppError {
     constructor(message = 'FORBIDDEN_TENANT_ACCESS') { super('FORBIDDEN_TENANT_ACCESS', 'forbidden', 403, false, false, message); }
 }
+/** Role/permission denial (e.g. non-owner attempting an owner-only action). Distinct
+ *  from tenant denial: the request is authenticated + in-tenant but not permitted. */
+export class ForbiddenError extends AppError {
+    constructor(message = 'forbidden') { super('FORBIDDEN', 'forbidden', 403, false, false, message); }
+}
 export class NotFoundError extends AppError {
     constructor(message = 'not found') { super('NOT_FOUND', 'not_found', 404, false, false, message); }
 }

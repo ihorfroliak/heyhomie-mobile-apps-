@@ -72,6 +72,8 @@ the Http adapter satisfies the same lifecycle as Local via the in-process fake.
   | POST | `/auth/login` | `{email,password}` | `200 {accessToken,refreshToken,expiresIn}` |
   | POST | `/auth/refresh` | `{refreshToken}` | `200 {…}` — rotates (single-use; reuse → whole family revoked) |
   | POST | `/auth/logout` | `{refreshToken}` | `204` — revokes the session |
+  | POST | `/auth/invite` | `{email,role}` **(auth: owner)** | `201 {id,inviteToken,email,role,expiresIn}` — one-time member invite (Build 23) |
+  | POST | `/auth/accept-invite` | `{inviteToken,password}` | `200 {…}` — join the tenant + set password once → logged in |
 
   Passwords are scrypt-hashed (per-user salt). The **access token** is the same
   short-lived HMAC token as before (`AUTH_ACCESS_TTL_SEC`, default 15 min); the

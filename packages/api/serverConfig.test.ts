@@ -42,6 +42,8 @@ eq('refresh TTL default 30d', cfg.refreshTtlSec, 2_592_000);
 ok('invalid AUTH_ACCESS_TTL_SEC rejected', issues({ ...good, AUTH_ACCESS_TTL_SEC: '15m' }).some(i => i.includes('AUTH_ACCESS_TTL_SEC')));
 ok('access ≥ refresh rejected', issues({ ...good, AUTH_ACCESS_TTL_SEC: '4000', AUTH_REFRESH_TTL_SEC: '1000' }).some(i => i.includes('shorter than')));
 eq('custom refresh TTL parsed', loadServerConfig({ ...good, AUTH_REFRESH_TTL_SEC: '604800' }).refreshTtlSec, 604_800);
+eq('invite TTL default 7d', cfg.inviteTtlSec, 604_800);
+ok('invalid AUTH_INVITE_TTL_SEC rejected', issues({ ...good, AUTH_INVITE_TTL_SEC: '7d' }).some(i => i.includes('AUTH_INVITE_TTL_SEC')));
 
 // aggregates ALL problems, not just the first
 ok('reports every issue at once', issues({ PORT: 'x' }).length >= 3);

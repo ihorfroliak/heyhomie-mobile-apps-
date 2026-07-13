@@ -7,7 +7,11 @@
  * never sees a tenant and cannot switch one. The OrderGateway contract is
  * unchanged — auth is injected at the adapter/transport, not the contract.
  */
-export type Role = 'admin' | 'member';
+// Per-user roles (Build 23). `owner` = the tenant creator (self-registration);
+// `admin`/`worker` = invited members. `member` is retained for backward
+// compatibility with tokens/sessions minted before per-user accounts existed.
+export type Role = 'owner' | 'admin' | 'worker' | 'member';
+export const ROLES: readonly Role[] = ['owner', 'admin', 'worker', 'member'];
 
 export interface AuthContext {
     userId: string;
@@ -42,14 +46,14 @@ export function validateClaims(raw: unknown, opts: VerifyTokenOptions = {}): Aut
     const skew = opts.clockSkewSec ?? 60;
     if (!raw || typeof raw !== 'object') throw new UnauthorizedError('malformed token');
     const p = raw as Record<string, unknown>;
-    if (typeof p.userId !== 'string' || !p.userId || typeof p.tenantId !== 'string' || !p.tenantId || (p.role !== 'admin' && p.role !== 'member')) {
+    if (typeof p.userId !== 'string' || !p.userId || typeof p.tenantId !== 'string' || !p.tenantId || typeof p.role !== 'string' || !ROLES.includes(p.role as Role)) {
         throw new UnauthorizedError('invalid token claims');
     }
     if (typeof p.iat !== 'number' || typeof p.exp !== 'number') throw new UnauthorizedError('token missing iat/exp');
     if (p.exp <= p.iat) throw new UnauthorizedError('token exp before iat');
     if (p.iat - skew > now) throw new UnauthorizedError('token used before issued'); // future-dated
     if (p.exp + skew < now) throw new UnauthorizedError('token expired');
-    return { userId: p.userId, tenantId: p.tenantId, role: p.role };
+    return { userId: p.userId, tenantId: p.tenantId, role: p.role as Role };
 }
 
 /** Tenant-access denial — a canonical AppError (403). Message kept stable. */

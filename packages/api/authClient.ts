@@ -30,6 +30,9 @@ export interface AuthClientConfig {
     fetchImpl?: FetchLike;
 }
 
+/** One-time invite an owner shares with a prospective member (Build 23). */
+export interface InviteTokenResult { id: string; inviteToken: string; email: string; role: 'admin' | 'worker'; expiresIn: number; }
+
 export interface AuthClient {
     /** Current access token (sync) — feed to `httpOrderPort({ getToken })`. */
     getToken(): string | undefined;
@@ -42,6 +45,10 @@ export interface AuthClient {
     /** App-start: fresh access token from the stored refresh token (or false). */
     bootstrap(): Promise<boolean>;
     logout(): Promise<void>;
+    /** Owner action: invite a member → the one-time invite token (Build 23). */
+    invite(email: string, role: 'admin' | 'worker'): Promise<InviteTokenResult>;
+    /** Invitee action: set a password once → logged in as the new member. */
+    acceptInvite(inviteToken: string, password: string): Promise<void>;
 }
 
 export function createAuthClient(cfg: AuthClientConfig): AuthClient {
@@ -89,6 +96,24 @@ export function createAuthClient(cfg: AuthClientConfig): AuthClient {
         login: (email, password) => establish('/auth/login', email, password),
         refresh,
         bootstrap: () => refresh(),
+        async invite(email, role) {
+            // Authenticated owner action → attach the bearer; authFetch refreshes on 401.
+            const res = await authFetch(`${base}/auth/invite`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json', authorization: `Bearer ${access}` },
+                body: JSON.stringify({ email, role }),
+            });
+            if (!res.ok) throw new UnauthorizedError('invite failed');
+            return (await res.json()) as InviteTokenResult;
+        },
+        async acceptInvite(inviteToken, password) {
+            // Public: sets the member's password once and logs them in (persists tokens).
+            const res = await post('/auth/accept-invite', { inviteToken, password });
+            if (!res.ok) throw new UnauthorizedError('invite acceptance failed');
+            const t = (await res.json()) as TokenResponse;
+            access = t.accessToken;
+            await session.setTokens(t);
+        },
         async logout() {
             const rt = await session.getRefreshToken();
             if (rt) { try { await post('/auth/logout', { refreshToken: rt }); } catch { /* best-effort revoke */ } }
@@ -124,4 +149,6 @@ export const auth = {
     refresh: () => need().refresh(),
     bootstrap: () => need().bootstrap(),
     logout: () => need().logout(),
+    invite: (email: string, role: 'admin' | 'worker') => need().invite(email, role),
+    acceptInvite: (inviteToken: string, password: string) => need().acceptInvite(inviteToken, password),
 };

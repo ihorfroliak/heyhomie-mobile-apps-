@@ -129,6 +129,23 @@ async function main() {
     ok('worker logout clears its token', workerClient.getToken() === undefined);
     ok('worker request rejected after logout (401)', (await workerClient.authFetch(`${base}/orders`, {})).status === 401);
 
+    // ── MEMBER INVITE over HTTP (Build 23): owner invites a worker into the tenant ──
+    const invite = await authClient.invite('member@e2e.pl', 'worker');
+    ok('owner receives a one-time invite token', typeof invite.inviteToken === 'string' && invite.role === 'worker' && !!invite.id);
+    const member = createAuthClient({ baseUrl: base, store: memorySecureStore() });
+    await member.acceptInvite(invite.inviteToken, 'MemberPass1!'); // sets password once → logged in
+    ok('invited worker is authenticated after accepting', typeof member.getToken() === 'string');
+    const memberGw = makeHttpOrderGateway(httpOrderPort({ baseUrl: base, getToken: member.getToken, fetchImpl: member.authFetch, eventSource: sseShim as never, timeoutMs: 4000 }));
+    await memberGw.init(noopKv);
+    ok('invited worker receives the tenant data (joined owner tenant)', await until(() => memberGw.ordersSnapshot().some(o => o.id === id)));
+    let reuse = false;
+    try { await member.acceptInvite(invite.inviteToken, 'MemberPass1!'); } catch { reuse = true; }
+    ok('invitation cannot be reused over HTTP (single-use)', reuse);
+    let ownerOnly = false;
+    try { await member.invite('nope@e2e.pl', 'worker'); } catch { ownerOnly = true; }
+    ok('invited worker cannot invite (owner-only) over HTTP', ownerOnly);
+    await member.logout();
+
     // 7) LOGOUT → tokens gone → requests rejected
     await authClient.logout();
     ok('logout clears the access token', authClient.getToken() === undefined);

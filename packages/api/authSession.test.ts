@@ -42,7 +42,7 @@ async function main() {
     const reg = await svc.register({ email: 'Owner@Example.com ', password: 'hunter2pw' });
     ok('register mints access + refresh', !!reg.accessToken && !!reg.refreshToken);
     ok('register expiresIn is access TTL', reg.expiresIn === 900);
-    ok('register creates an admin identity', reg.identity.role === 'admin');
+    ok('register creates an owner identity', reg.identity.role === 'owner');
     ok('access token carries the tenant', reg.accessToken.includes(reg.identity.tenantId));
     await throws('duplicate email → CONFLICT', 'CONFLICT', () => svc.register({ email: 'owner@example.com', password: 'another1x' }));
     await throws('bad email → VALIDATION', 'VALIDATION_FAILED', () => svc.register({ email: 'nope', password: 'hunter2pw' }));
@@ -68,7 +68,7 @@ async function main() {
     // ── refresh rotation ──
     const r1 = await svc.refresh(login.refreshToken);
     ok('refresh mints a NEW refresh token (rotation)', r1.refreshToken !== login.refreshToken);
-    ok('refresh preserves identity', r1.identity.userId === login.identity.userId && r1.identity.role === 'admin');
+    ok('refresh preserves identity', r1.identity.userId === login.identity.userId && r1.identity.role === 'owner');
     ok('refresh mints a fresh access token', !!r1.accessToken);
 
     // old refresh token is single-use → reuse is theft → revoke the whole family
@@ -92,6 +92,43 @@ async function main() {
     await svc.logout(login4.refreshToken); // no throw — idempotent
     await svc.logout('never-issued');      // no throw — unknown token no-op
     ok('logout is idempotent / safe on unknown token', true);
+
+    // ── Build 23: member invites (self-contained clock + repo) ──
+    {
+        let c = 2_000_000_000_000;
+        const repo2 = memoryAuthRepo();
+        const svc2 = makeAuthService(repo2, fakeCrypto(), { refreshTtlSec: 100_000, inviteTtlSec: 1000, now: () => c });
+        const owner = await svc2.register({ email: 'owner2@x.com', password: 'ownerpass1' });
+
+        const inv = await svc2.invite({ email: 'worker@x.com', role: 'worker' }, owner.identity);
+        ok('owner invite returns a one-time token', typeof inv.inviteToken === 'string' && inv.role === 'worker' && !!inv.id);
+        await throws('invite existing email → CONFLICT', 'CONFLICT', () => svc2.invite({ email: 'owner2@x.com', role: 'worker' }, owner.identity));
+        await throws('invite bad role → VALIDATION', 'VALIDATION_FAILED', () => svc2.invite({ email: 'x@y.com', role: 'owner' as never }, owner.identity));
+
+        const worker = await svc2.accept({ inviteToken: inv.inviteToken, password: 'workerpass1' });
+        ok('accept creates a worker JOINED to the owner tenant', worker.identity.role === 'worker' && worker.identity.tenantId === owner.identity.tenantId);
+        ok('invited worker can now log in', (await svc2.login({ email: 'worker@x.com', password: 'workerpass1' })).identity.role === 'worker');
+        await throws('invitation cannot be reused → 401', 'UNAUTHENTICATED', () => svc2.accept({ inviteToken: inv.inviteToken, password: 'workerpass1' }));
+
+        // owner-only: an invited worker may NOT invite or revoke
+        await throws('non-owner invite → FORBIDDEN', 'FORBIDDEN', () => svc2.invite({ email: 'z@x.com', role: 'worker' }, worker.identity));
+
+        // revoked invitation rejected
+        const inv2 = await svc2.invite({ email: 'admin@x.com', role: 'admin' }, owner.identity);
+        await svc2.revokeInvite(inv2.id, owner.identity);
+        await throws('revoked invitation rejected → 401', 'UNAUTHENTICATED', () => svc2.accept({ inviteToken: inv2.inviteToken, password: 'adminpass1' }));
+
+        // revoke authorization: non-owner + cross-tenant both forbidden (no existence leak)
+        const inv3 = await svc2.invite({ email: 'admin2@x.com', role: 'admin' }, owner.identity);
+        await throws('non-owner revoke → FORBIDDEN', 'FORBIDDEN', () => svc2.revokeInvite(inv3.id, worker.identity));
+        const otherOwner = await svc2.register({ email: 'other@x.com', password: 'otherpass1' });
+        await throws('cross-tenant revoke → FORBIDDEN', 'FORBIDDEN', () => svc2.revokeInvite(inv3.id, otherOwner.identity));
+
+        // expired invitation rejected
+        const inv4 = await svc2.invite({ email: 'late@x.com', role: 'worker' }, owner.identity);
+        c += 1000 * 1000 + 1; // past inviteTtlSec
+        await throws('expired invitation rejected → 401', 'UNAUTHENTICATED', () => svc2.accept({ inviteToken: inv4.inviteToken, password: 'latepass11' }));
+    }
 
     console.log(`\n${passed} passed, ${fail.length} failed`);
     if (fail.length) { fail.forEach(f => console.log('  FAIL: ' + f)); process.exit(1); }

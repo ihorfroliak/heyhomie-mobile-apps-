@@ -20,6 +20,8 @@ export interface ServerConfig {
     accessTtlSec: number;
     /** Refresh-token TTL (sec) — the long-lived, revocable session. */
     refreshTtlSec: number;
+    /** Invitation TTL (sec) — how long a member invite stays acceptable (Build 23). */
+    inviteTtlSec: number;
 }
 
 export class ConfigError extends Error {
@@ -76,6 +78,10 @@ export function loadServerConfig(env: Record<string, string | undefined>): Serve
     if (!Number.isInteger(refreshTtlSec) || refreshTtlSec < 1) issues.push(`AUTH_REFRESH_TTL_SEC must be a positive integer seconds (got "${env.AUTH_REFRESH_TTL_SEC}")`);
     if (accessTtlSec >= refreshTtlSec) issues.push('AUTH_ACCESS_TTL_SEC must be shorter than AUTH_REFRESH_TTL_SEC');
 
+    const inviteRaw = env.AUTH_INVITE_TTL_SEC?.trim();
+    const inviteTtlSec = inviteRaw ? Number(inviteRaw) : 604_800; // 7 days
+    if (!Number.isInteger(inviteTtlSec) || inviteTtlSec < 1) issues.push(`AUTH_INVITE_TTL_SEC must be a positive integer seconds (got "${env.AUTH_INVITE_TTL_SEC}")`);
+
     if (issues.length) throw new ConfigError(issues);
-    return { databaseUrl: databaseUrl as string, port, authSecret: authSecret as string, devMode, production, trustProxy, rateCapacity, rateRefillPerSec, shutdownDrainMs, accessTtlSec, refreshTtlSec };
+    return { databaseUrl: databaseUrl as string, port, authSecret: authSecret as string, devMode, production, trustProxy, rateCapacity, rateRefillPerSec, shutdownDrainMs, accessTtlSec, refreshTtlSec, inviteTtlSec };
 }

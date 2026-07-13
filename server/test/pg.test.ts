@@ -25,7 +25,8 @@ const authB: AuthContext = { userId: 'b', tenantId: 'T2', role: 'member' };
 
 async function main() {
     const pool = makePool(PG_URL);
-    await pool.query('DROP TABLE IF EXISTS auth_sessions'); // clean slate (test db only)
+    await pool.query('DROP TABLE IF EXISTS invitations'); // clean slate (test db only)
+    await pool.query('DROP TABLE IF EXISTS auth_sessions');
     await pool.query('DROP TABLE IF EXISTS users');
     await pool.query('DROP TABLE IF EXISTS orders');
     await pool.query('DROP TABLE IF EXISTS schema_migrations');
@@ -37,10 +38,10 @@ async function main() {
     const tMig = Date.now();
     const [runX, runY] = await Promise.all([runMigrations(pool), runMigrations(pool)]);
     console.log(`  [perf] concurrent migration on empty db: ${Date.now() - tMig}ms`);
-    eq('exactly 5 migrations applied across both starts', runX.length + runY.length, 5);
-    ok('one instance migrated, the other waited (0)', (runX.length === 5 && runY.length === 0) || (runY.length === 5 && runX.length === 0));
+    eq('exactly 6 migrations applied across both starts', runX.length + runY.length, 6);
+    ok('one instance migrated, the other waited (0)', (runX.length === 6 && runY.length === 0) || (runY.length === 6 && runX.length === 0));
     const hist = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-    eq('migration history records each version once', hist.rows.map((r: { version: number }) => Number(r.version)), [1, 2, 3, 4, 5]);
+    eq('migration history records each version once', hist.rows.map((r: { version: number }) => Number(r.version)), [1, 2, 3, 4, 5, 6]);
     eq('re-running migrations is a no-op (idempotent)', (await runMigrations(pool)).length, 0);
     await initSchema(pool); // the callers' entrypoint — also idempotent
     const cols = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'orders'`);
@@ -217,6 +218,20 @@ async function main() {
             ok('theft-revoked family stays dead on a fresh connection (durable)', familyDead);
             await p2.end();
         }
+
+        // ── Build 23: member invite over real pg (persist + accept + single-use) ──
+        const owner = reg.identity; // role 'owner' from register
+        const inv = await svc.invite({ email: 'member@pg.pl', role: 'worker' }, owner);
+        const invRow = await pool.query('SELECT tenant_id, role, accepted_at, token_hash FROM invitations WHERE id = $1', [inv.id]);
+        ok('invitation persisted (pending, tenant-bound, hashed token)', invRow.rows[0].tenant_id === owner.tenantId && invRow.rows[0].accepted_at === null && invRow.rows[0].token_hash !== inv.inviteToken);
+        const member = await svc.accept({ inviteToken: inv.inviteToken, password: 'MemberPass1!' });
+        ok('accept creates a member JOINED to the owner tenant over pg', member.identity.role === 'worker' && member.identity.tenantId === owner.tenantId);
+        const accRow = await pool.query('SELECT accepted_at FROM invitations WHERE id = $1', [inv.id]);
+        ok('invitation marked accepted in DB (single-use)', accRow.rows[0].accepted_at !== null);
+        let inviteReuse = false;
+        try { await svc.accept({ inviteToken: inv.inviteToken, password: 'MemberPass1!' }); } catch { inviteReuse = true; }
+        ok('reused invitation rejected over pg', inviteReuse);
+        ok('invited member can log in over pg', (await svc.login({ email: 'member@pg.pl', password: 'MemberPass1!' })).identity.tenantId === owner.tenantId);
     }
 
     await pool.end();

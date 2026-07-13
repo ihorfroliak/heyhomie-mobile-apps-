@@ -102,12 +102,14 @@ UI (apps/*)  ──imports only──►  orderGateway  (packages/api/orderContr
   drops it (no leak to the contract `Order`).
 - Server trust boundary: `server/src/auth.ts` — HMAC sign/verify (node:crypto, timing-safe),
   `authenticateRequest` preHandler (Bearer or dev `x-dev-*` headers when `AUTH_DEV_MODE=1`).
-- **Credential issuer (Build 18)**: `packages/api/authSession.ts` — pure `makeAuthService`
-  (injected `AuthRepo`+`AuthCrypto`, mirrors `orderService`) → `/auth/{register,login,refresh,
-  logout}`. Email+password (scrypt, server-side), existing HMAC token as the **access token**
-  + opaque **refresh token** (sha256-hashed at rest, single-use rotation, reuse → revoke family).
-  Server: `authCrypto.ts` (node:crypto) + `pgAuthRepo.ts`; migration v5 (`users`+`auth_sessions`).
-  Replaces dev-only `/dev/token` as the issuer. Contract + access-token format unchanged.
+- **Credential issuer (Build 18, invites Build 23)**: `packages/api/authSession.ts` — pure
+  `makeAuthService` (injected `AuthRepo`+`AuthCrypto`, mirrors `orderService`) → `/auth/{register,
+  login,refresh,logout,invite,accept-invite}`. Email+password (scrypt), HMAC **access token** +
+  opaque single-use-rotating **refresh token**. Server: `authCrypto.ts` + `pgAuthRepo.ts`;
+  migrations v5 (`users`+`auth_sessions`) + v6 (`invitations`). **One tenant → many users**:
+  `register` mints an `owner` (new tenant); the owner `invite`s members (`admin`/`worker`) via a
+  one-time, expiring, revocable token; `accept` joins them to the owner's tenant. `Role` =
+  `owner|admin|worker|member` (member = legacy). Contract + access-token format unchanged.
 - **Client auth (Build 20/21/22)**: `authClient.ts` (sync `getToken`, `authFetch` refresh-on-401,
   login/register/refresh/logout/bootstrap); **all three apps** (client/admin/worker) authenticate
   + gate to `/login` + consume `orderGateway`; tokens live in **expo-secure-store**. Apps never

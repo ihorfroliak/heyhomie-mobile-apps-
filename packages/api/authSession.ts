@@ -17,7 +17,7 @@
  * frozen OrderGateway contract.
  */
 import type { AuthContext, Role } from './auth';
-import { ValidationError, UnauthorizedError, ConflictError } from './errors';
+import { ValidationError, UnauthorizedError, ConflictError, ForbiddenError } from './errors';
 
 /** A credential-holder. `passwordHash`/`passwordSalt` are opaque to this module
  *  (the injected AuthCrypto owns their format). A user owns exactly one tenant. */
@@ -52,6 +52,35 @@ export interface AuthTokens {
     identity: AuthContext;
 }
 
+/** Roles an owner may hand out via an invite (never `owner`/`member`). */
+export type InviteRole = 'admin' | 'worker';
+
+/** A pending membership offer (Build 23). The raw invite token is returned to the
+ *  owner ONCE; only its sha256 is stored. Single-use (`acceptedAt`), expiring,
+ *  revocable. Bound to a tenant + email + role — the invitee can't change any of them. */
+export interface Invitation {
+    id: string;
+    tenantId: string;
+    email: string;
+    role: InviteRole;
+    tokenHash: string;
+    invitedByUserId: string;
+    expiresAt: string; // ISO
+    createdAt: string; // ISO
+    acceptedAt: string | null;
+    revokedAt: string | null;
+}
+
+/** What the owner receives from `invite`. `inviteToken` is shared out-of-band with
+ *  the invitee; `id` lets the owner revoke it. No tenant internals are exposed. */
+export interface InviteResult {
+    id: string;
+    inviteToken: string;
+    email: string;
+    role: InviteRole;
+    expiresIn: number;
+}
+
 /** Persistence port (users + sessions). Every impl is tenant-safe by construction:
  *  identity is resolved by credential, never by client-supplied tenant. */
 export interface AuthRepo {
@@ -63,6 +92,12 @@ export interface AuthRepo {
     revokeSession(id: string, at: string): Promise<void>;
     /** Theft response: revoke every (still-live) session for a user. */
     revokeAllUserSessions(userId: string, at: string): Promise<void>;
+    // Invitations (Build 23).
+    insertInvitation(inv: Invitation): Promise<void>;
+    findInvitationByTokenHash(hash: string): Promise<Invitation | undefined>;
+    findInvitationById(id: string): Promise<Invitation | undefined>;
+    markInvitationAccepted(id: string, at: string): Promise<void>;
+    revokeInvitation(id: string, at: string): Promise<void>;
 }
 
 /** Crypto port — the ONLY place node:crypto is used (server-side impl). Injected
@@ -83,12 +118,15 @@ export interface AuthCrypto {
 
 export interface AuthServiceOptions {
     refreshTtlSec: number;
+    inviteTtlSec?: number; // default 7 days — how long an invitation stays acceptable
     now?: () => number; // epoch ms (default Date.now) — injected for expiry tests
     minPasswordLength?: number; // default 8
 }
 
 export interface RegisterInput { email: string; password: string; }
 export interface LoginInput { email: string; password: string; }
+export interface InviteInput { email: string; role: InviteRole; }
+export interface AcceptInviteInput { inviteToken: string; password: string; }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -117,6 +155,12 @@ export interface AuthService {
     login(input: LoginInput): Promise<AuthTokens>;
     refresh(refreshToken: string): Promise<AuthTokens>;
     logout(refreshToken: string): Promise<void>;
+    /** Owner invites a member to their tenant → one-time invite token (Build 23). */
+    invite(input: InviteInput, auth: AuthContext): Promise<InviteResult>;
+    /** Invitee sets their password once → user created in the tenant + logged in. */
+    accept(input: AcceptInviteInput): Promise<AuthTokens>;
+    /** Owner cancels a still-pending invitation in their tenant. */
+    revokeInvite(inviteId: string, auth: AuthContext): Promise<void>;
 }
 
 /**
@@ -126,6 +170,7 @@ export interface AuthService {
 export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthServiceOptions): AuthService {
     const now = opts.now ?? (() => Date.now());
     const minPw = opts.minPasswordLength ?? 8;
+    const inviteTtlSec = opts.inviteTtlSec ?? 604_800; // 7 days
     const iso = (ms: number) => new Date(ms).toISOString();
 
     /** Create a fresh refresh session for an identity + mint the access token. */
@@ -153,12 +198,13 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             const password = requirePassword(input.password, minPw);
             if (await repo.findUserByEmail(email)) throw new ConflictError('email already registered');
             const { hash, salt } = crypto.hashPassword(password);
-            // Self-registration provisions a business: a new tenant, owned by an admin.
+            // Self-registration provisions a business: a new tenant, owned by its
+            // creator (role `owner` — Build 23). Owners may later invite members.
             const user: User = {
                 id: crypto.newId(),
                 tenantId: crypto.newId(),
                 email,
-                role: 'admin',
+                role: 'owner',
                 passwordHash: hash,
                 passwordSalt: salt,
                 createdAt: iso(now()),
@@ -206,6 +252,62 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             const session = await repo.findSessionByRefreshHash(crypto.hashRefresh(refreshToken));
             if (session && !session.revokedAt) await repo.revokeSession(session.id, iso(now()));
         },
+
+        async invite(input, auth) {
+            // Owner-only: an authenticated, in-tenant, but non-owner caller is forbidden.
+            if (auth.role !== 'owner') throw new ForbiddenError('only the owner may invite members');
+            const email = normalizeEmail(input.email);
+            if (input.role !== 'admin' && input.role !== 'worker') throw new ValidationError('role must be admin or worker');
+            if (await repo.findUserByEmail(email)) throw new ConflictError('a user with that email already exists');
+            const t = now();
+            const { token: inviteToken, hash: tokenHash } = crypto.newRefresh(); // reuse: opaque random + sha256
+            const inv: Invitation = {
+                id: crypto.newId(),
+                tenantId: auth.tenantId, // bound to the OWNER's tenant — never client-supplied
+                email,
+                role: input.role,
+                tokenHash,
+                invitedByUserId: auth.userId,
+                expiresAt: iso(t + inviteTtlSec * 1000),
+                createdAt: iso(t),
+                acceptedAt: null,
+                revokedAt: null,
+            };
+            await repo.insertInvitation(inv);
+            return { id: inv.id, inviteToken, email, role: input.role, expiresIn: inviteTtlSec };
+        },
+
+        async accept(input) {
+            if (typeof input.inviteToken !== 'string' || !input.inviteToken) throw new UnauthorizedError('invalid invitation');
+            const password = requirePassword(input.password, minPw);
+            const inv = await repo.findInvitationByTokenHash(crypto.hashRefresh(input.inviteToken));
+            const t = now();
+            // Generic 401s so a probe can't distinguish revoked / used / expired / bogus.
+            if (!inv || inv.revokedAt || inv.acceptedAt || new Date(inv.expiresAt).getTime() <= t) {
+                throw new UnauthorizedError('invalid or expired invitation');
+            }
+            const { hash, salt } = crypto.hashPassword(password);
+            const user: User = {
+                id: crypto.newId(),
+                tenantId: inv.tenantId, // JOIN the inviter's tenant (from the invite, not the client)
+                email: inv.email,
+                role: inv.role,
+                passwordHash: hash,
+                passwordSalt: salt,
+                createdAt: iso(t),
+            };
+            await repo.insertUser(user); // unique-email enforced (ConflictError on race)
+            await repo.markInvitationAccepted(inv.id, iso(t)); // single-use
+            return issue({ userId: user.id, tenantId: user.tenantId, role: user.role });
+        },
+
+        async revokeInvite(inviteId, auth) {
+            if (auth.role !== 'owner') throw new ForbiddenError('only the owner may revoke invitations');
+            const inv = await repo.findInvitationById(inviteId);
+            // Deny-by-default + tenant isolation: a cross-tenant id is treated as not-found.
+            if (!inv || inv.tenantId !== auth.tenantId) throw new ForbiddenError('invitation not found');
+            if (!inv.revokedAt && !inv.acceptedAt) await repo.revokeInvitation(inv.id, iso(now()));
+        },
     };
 }
 
@@ -215,6 +317,8 @@ export function memoryAuthRepo(): AuthRepo {
     const usersByEmail = new Map<string, User>();
     const sessionsById = new Map<string, AuthSession>();
     const sessionsByHash = new Map<string, AuthSession>();
+    const invitesById = new Map<string, Invitation>();
+    const invitesByHash = new Map<string, Invitation>();
     return {
         async findUserByEmail(email) { return usersByEmail.get(email); },
         async findUserById(id) { return usersById.get(id); },
@@ -234,6 +338,20 @@ export function memoryAuthRepo(): AuthRepo {
         },
         async revokeAllUserSessions(userId, at) {
             for (const s of sessionsById.values()) if (s.userId === userId && !s.revokedAt) s.revokedAt = at;
+        },
+        async insertInvitation(inv) {
+            invitesById.set(inv.id, inv);
+            invitesByHash.set(inv.tokenHash, inv);
+        },
+        async findInvitationByTokenHash(hash) { return invitesByHash.get(hash); },
+        async findInvitationById(id) { return invitesById.get(id); },
+        async markInvitationAccepted(id, at) {
+            const inv = invitesById.get(id);
+            if (inv && !inv.acceptedAt) inv.acceptedAt = at;
+        },
+        async revokeInvitation(id, at) {
+            const inv = invitesById.get(id);
+            if (inv && !inv.revokedAt) inv.revokedAt = at;
         },
     };
 }

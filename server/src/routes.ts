@@ -1,6 +1,6 @@
 /** REST + SSE routes. 1:1 with the OrderGateway HTTP port. Tenant-enforced. */
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { toContractOrder, validateSubmitOrderInput, NotFoundError, IdempotencyStore, ValidationError, type AuthService, type OrderService, type ServerOrder, type SubmitOrderResult } from '@heyhomie/api';
+import { toContractOrder, validateSubmitOrderInput, NotFoundError, IdempotencyStore, ValidationError, type AuthService, type InviteRole, type OrderService, type ServerOrder, type SubmitOrderResult } from '@heyhomie/api';
 import { reqAuth } from './auth.js';
 
 /**
@@ -35,6 +35,19 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): voi
         const b = body(req.body);
         await auth.logout(b.refreshToken as string);
         return reply.code(204).send();
+    });
+
+    // Member invites (Build 23). /auth/invite is AUTHENTICATED (owner-only, enforced
+    // in the service via req.auth); /auth/accept-invite is public (it establishes a
+    // new user). The invite token is shared out-of-band; tenant internals never leak.
+    app.post('/auth/invite', async (req, reply) => {
+        const b = body(req.body);
+        const result = await auth.invite({ email: b.email as string, role: b.role as InviteRole }, reqAuth(req));
+        return reply.code(201).send({ id: result.id, inviteToken: result.inviteToken, email: result.email, role: result.role, expiresIn: result.expiresIn });
+    });
+    app.post('/auth/accept-invite', async (req) => {
+        const b = body(req.body);
+        return wire(await auth.accept({ inviteToken: b.inviteToken as string, password: b.password as string }));
     });
 }
 
