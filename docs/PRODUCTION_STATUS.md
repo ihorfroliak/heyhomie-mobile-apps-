@@ -14,7 +14,7 @@ Latest build → [BUILD_HISTORY.md](BUILD_HISTORY.md). Gate (`npm run check`): a
 | Deployment | 85 | docker build + compose healthy + restart verified; non-root, reproducible build |
 | Infrastructure | 78 | containerized stack proven; single-instance (multi-instance needs shared state) |
 | Maintainability | 87 | clean layering, anti-dep guard, frozen contract, docs; server typecheck now clean + gated (Build 19) |
-| Testability | 95 | 734 gated assertions + live/e2e/pg/ops/load/repro harnesses; CI runs the strongest suites — `test:pg`+`test:ops` (real pg), `test:live`, `test:e2e` (full auth lifecycle: invite mgmt / password reset / sessions / disable-enable-delete), `typecheck:server`; one-command `verify:full`. Mobile UI not machine-run (no Expo runtime) — auth + gateway logic proven via e2e + session/authClient/authSession gate tests |
+| Testability | 95 | 743 gated assertions + live/e2e/pg/ops/load/repro harnesses; CI runs the strongest suites — `test:pg`+`test:ops` (real pg), `test:live`, `test:e2e` (full auth lifecycle + NotificationPort delivery/isolation), `typecheck:server`; one-command `verify:full`. Mobile UI not machine-run (no Expo runtime) — auth + gateway logic proven via e2e + gate tests |
 | Scalability | ~50 | DB indexed/efficient; SSE full-snapshot + unpaginated list are the ceilings |
 
 ## Performance baseline (Build 13, measured on real Postgres via `test:load`)
@@ -38,6 +38,12 @@ Bottlenecks = unpaginated list + full-snapshot SSE (both contract-versioned work
 
 ## CODE COMPLETE (verified in-repo)
 Domain rules, OrderGateway contract + both adapters, authoritative `orderService` (CAS, tenant), auth+HMAC + **credential issuer** (`/auth/*`: scrypt, access+refresh, rotation/reuse-detection — Build 18), **client integration** (env-selected gateway + `authClient` — Build 20), **mobile auth UX** (login/register/logout + route gate + expo-secure-store — Build 21) across **all three apps** (worker on the gateway — Build 22), Fastify server (routes/SSE/metrics/migrations/graceful-shutdown), Docker image + compose. Proven on real Postgres 16 + real HTTP + real docker signals + a real end-to-end app journey (`test:e2e`).
+
+## Notification delivery (Build 26)
+Capability tokens (invite / password-reset) leave through one seam — `NotificationPort`
+(`packages/api/notificationPort.ts`). `consoleNotificationPort` (token-free structured logs)
+is wired in prod bootstrap today; swap in an SMTP/SES/SendGrid impl (same interface) for real
+email. Delivery is best-effort + isolated; tokens/hashes are never logged.
 
 ## INFRASTRUCTURE PENDING (external — not repo defects)
 - TLS / DNS / hosting; reverse proxy + `TRUST_PROXY=1` (real client IP); managed Postgres.

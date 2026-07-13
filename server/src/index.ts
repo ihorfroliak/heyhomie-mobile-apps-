@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { loadServerConfig, ConfigError } from '@heyhomie/api';
 import { makePool, initSchema } from './db.js';
 import { pgOrderRepo } from './pgRepo.js';
+import { consoleNotificationPort } from '@heyhomie/api';
 import { pgAuthRepo } from './pgAuthRepo.js';
 import { makeAuthCrypto } from './authCrypto.js';
 import { buildApp } from './app.js';
@@ -23,7 +24,9 @@ async function main() {
 
     // 3. The application (routes, auth, metrics, hooks) — repo-injected. Auth
     //    issuer wired with real crypto (scrypt/HMAC) + the Postgres auth repo.
-    const authDeps = { repo: pgAuthRepo(pool), crypto: makeAuthCrypto(config.authSecret, config.accessTtlSec) };
+    // NotificationPort delivers invite/reset tokens. Console until a real provider
+    // (SMTP/SES/SendGrid) implements the same port — the ONLY delivery abstraction.
+    const authDeps = { repo: pgAuthRepo(pool), crypto: makeAuthCrypto(config.authSecret, config.accessTtlSec), notifications: consoleNotificationPort() };
     const { app, beginShutdown } = buildApp(config, pgOrderRepo(pool), async () => { await pool.query('SELECT 1'); }, authDeps);
     const DRAIN_MS = config.shutdownDrainMs; // validated at boot (fail-fast, C2)
 

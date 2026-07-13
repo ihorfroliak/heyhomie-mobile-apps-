@@ -1,6 +1,7 @@
 /** REST + SSE routes. 1:1 with the OrderGateway HTTP port. Tenant-enforced. */
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { toContractOrder, validateSubmitOrderInput, NotFoundError, IdempotencyStore, ValidationError, type AuthService, type InviteRole, type OrderService, type ServerOrder, type SubmitOrderResult } from '@heyhomie/api';
+import { toContractOrder, validateSubmitOrderInput, NotFoundError, IdempotencyStore, ValidationError, nullNotificationPort, type AuthService, type InviteRole, type NotificationPort, type OrderService, type ServerOrder, type SubmitOrderResult } from '@heyhomie/api';
+import type { FastifyBaseLogger } from 'fastify';
 import { reqAuth } from './auth.js';
 
 /**
@@ -9,10 +10,17 @@ import { reqAuth } from './auth.js';
  * an access + refresh pair; refresh rotates (single-use); logout revokes. The
  * service returns canonical AppErrors (401 generic → no enumeration).
  */
-export function registerAuthRoutes(app: FastifyInstance, auth: AuthService, opts?: { devMode?: boolean }): void {
+export function registerAuthRoutes(app: FastifyInstance, auth: AuthService, opts?: { devMode?: boolean; notifications?: NotificationPort }): void {
+    const notifications = opts?.notifications ?? nullNotificationPort();
     const body = (b: unknown): Record<string, unknown> => {
         if (!b || typeof b !== 'object') throw new ValidationError('invalid request body');
         return b as Record<string, unknown>;
+    };
+    // Best-effort, ISOLATED delivery: a send failure NEVER fails the auth op and the
+    // failure record is token-free (no secret leakage). No auto-retry (provider concern).
+    const deliver = async (log: FastifyBaseLogger, type: 'invitation' | 'password_reset', send: () => Promise<void>): Promise<void> => {
+        try { await send(); }
+        catch { log.error({ event: 'notification_failed', type }, 'notification delivery failed'); }
     };
     // Client-safe wire shape: the access token is opaque to the UI and the tenant
     // stays server-side (hard rule) — never echo identity/tenantId in the body.
@@ -43,6 +51,9 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService, opts
     app.post('/auth/invite', async (req, reply) => {
         const b = body(req.body);
         const result = await auth.invite({ email: b.email as string, role: b.role as InviteRole }, reqAuth(req));
+        // Deliver the invite email (best-effort); the owner also gets the token in the
+        // response as an out-of-band fallback (unchanged).
+        await deliver(req.log, 'invitation', () => notifications.sendInvitation({ email: result.email, inviteToken: result.inviteToken, role: result.role, expiresInSec: result.expiresIn }));
         return reply.code(201).send({ id: result.id, inviteToken: result.inviteToken, email: result.email, role: result.role, expiresIn: result.expiresIn });
     });
     app.post('/auth/accept-invite', async (req) => {
@@ -61,9 +72,11 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService, opts
     app.post('/auth/password-reset/request', async (req, reply) => {
         const b = body(req.body);
         const res = await auth.requestPasswordReset({ email: b.email as string });
-        // Enumeration-safe: ALWAYS 200 regardless of whether the email exists. The
-        // token is delivered out-of-band (email); it is echoed ONLY in dev mode, the
-        // same gate as /dev/token — never in production.
+        // Deliver the reset email (best-effort) only when a token exists; the response
+        // is IDENTICAL either way (enumeration-safe). A delivery failure never changes it.
+        if (res) await deliver(req.log, 'password_reset', () => notifications.sendPasswordReset({ email: res.email, resetToken: res.resetToken, expiresInSec: res.expiresIn }));
+        // The token is delivered out-of-band (email); it is echoed ONLY in dev mode, the
+        // same gate as /dev/token — never in production, never in a log.
         return reply.code(200).send(opts?.devMode && res ? { resetToken: res.resetToken } : {});
     });
     app.post('/auth/password-reset/confirm', async (req, reply) => {

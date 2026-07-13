@@ -232,7 +232,7 @@ export interface AuthService {
     listInvitations(auth: AuthContext): Promise<InvitationView[]>;
     /** Request a password reset. Returns the token to deliver out-of-band (email),
      *  or null if no such user — the CALLER must respond identically either way. */
-    requestPasswordReset(input: PasswordResetRequestInput): Promise<{ resetToken: string; email: string } | null>;
+    requestPasswordReset(input: PasswordResetRequestInput): Promise<{ resetToken: string; email: string; expiresIn: number } | null>;
     /** Confirm a reset: set the new password + revoke ALL sessions (fresh login). */
     confirmPasswordReset(input: PasswordResetConfirmInput): Promise<void>;
     /** List the CURRENT user's own live sessions (no refresh tokens). */
@@ -440,7 +440,7 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
                 id: crypto.newId(), userId: user.id, email: user.email, tokenHash,
                 expiresAt: iso(t + resetTtlSec * 1000), createdAt: iso(t), usedAt: null,
             });
-            return { resetToken, email: user.email };
+            return { resetToken, email: user.email, expiresIn: resetTtlSec };
         },
 
         async confirmPasswordReset(input) {

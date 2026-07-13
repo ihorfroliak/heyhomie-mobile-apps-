@@ -39,6 +39,7 @@ Full diagram: [PROJECT_STATE.md §2](PROJECT_STATE.md).
 | [orderGateway.ts](../packages/api/orderGateway.ts) | Local adapter (wraps private store) + active `orderGateway` binding — **env-selected** Local vs HTTP on `EXPO_PUBLIC_ORDERS_API_URL` (Build 20). |
 | [httpOrderGateway.ts](../packages/api/httpOrderGateway.ts) | `makeHttpOrderGateway(port)` + real `httpOrderPort` (fetch+SSE, token, timeouts/retry/dedupe, self-healing stream). |
 | [authClient.ts](../packages/api/authClient.ts) | Build 20/23: client auth — sync `getToken`, `authFetch` (refresh-on-401), login/register/refresh/logout/bootstrap + **invite/acceptInvite** over `/auth/*`; `configureAuth` singleton. RN-safe. |
+| [notificationPort.ts](../packages/api/notificationPort.ts) | Build 26: **the one delivery seam** — `NotificationPort` (`sendInvitation`/`sendPasswordReset`) + `nullNotificationPort` (tests) + `consoleNotificationPort` (dev, token-free + masked). Injected via `AuthDeps.notifications`; route delivers best-effort + isolated. Never logs tokens. |
 | [httpResilience.ts](../packages/api/httpResilience.ts) | Pure resilience: `withRetry`/`withTimeout`/`backoffDelay`/`RetryBudget`/`dedupe`/`HttpStatusError`. |
 | [serverConfig.ts](../packages/api/serverConfig.ts) | Fail-fast env validation (`loadServerConfig`, `ConfigError`). |
 | [errors.ts](../packages/api/errors.ts) | Canonical `AppError` hierarchy (internal/public code, status, retryable, `toResponse` — no leak). |
@@ -142,7 +143,9 @@ per-user accounts — owner invites admin/worker (one-time token, migration v6
 operations — invitation list/revoke, password reset, session management (migration
 v7; `revokedReason` isolates revokes). **25** account disable/enable/delete (owner-only,
 migration v8 `users.disabled_at`; disabled→login/refresh/reset blocked; delete revokes
-sessions+invites + cascades); no contract change.
+sessions+invites + cascades). **26** `NotificationPort` — the one delivery seam for
+invite/reset tokens (`consoleNotificationPort` dev, best-effort + isolated, token-free
+logs; `makeAuthService` unchanged); no contract change.
 Every "verified" build surfaced ≥1 real defect only reachable
 by executing the real path — details + measured evidence in [BUILD_HISTORY.md](BUILD_HISTORY.md).
 

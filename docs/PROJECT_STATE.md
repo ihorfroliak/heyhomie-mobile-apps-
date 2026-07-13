@@ -127,6 +127,15 @@ UI (apps/*)  ──imports only──►  orderGateway  (packages/api/orderContr
      resolver** (`ownerTarget`) — missing / cross-tenant / self are rejected identically so
      existence never leaks. 5. **Views omit secrets** — `*View`/`*Summary` never carry hashes.
      6. **Never touch OrderGateway** — auth is orthogonal, injected at the transport/service.
+     7. **Delivery via `NotificationPort` only** (Build 26) — capability tokens reach the outside
+     world through exactly one seam (`sendInvitation`/`sendPasswordReset`), injected at the
+     app/route layer (`AuthDeps.notifications`, default `nullNotificationPort`). The **service
+     never delivers** — it mints tokens; the ROUTE hands them to the port. Delivery is
+     **best-effort + isolated** (a send failure never fails the auth op nor changes an
+     enumeration-safe response; no auto-retry — that's a provider concern). **Logging policy:**
+     structured records only; the port RECEIVES the token but NEVER logs it; recipients are
+     masked (`maskEmail`); token hashes / passwords / refresh tokens are never passed here or
+     logged. A real provider (SMTP/SES/SendGrid) is just another `NotificationPort` impl.
 - **Client auth (Build 20/21/22)**: `authClient.ts` (sync `getToken`, `authFetch` refresh-on-401,
   login/register/refresh/logout/bootstrap); **all three apps** (client/admin/worker) authenticate
   + gate to `/login` + consume `orderGateway`; tokens live in **expo-secure-store**. Apps never

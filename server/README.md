@@ -76,7 +76,7 @@ the Http adapter satisfies the same lifecycle as Local via the in-process fake.
   | POST | `/auth/accept-invite` | `{inviteToken,password}` | `200 {…}` — join the tenant + set password once → logged in |
   | GET | `/auth/invitations` | **(auth: owner/admin)** | `{invitations:[…]}` — email/role/status/expiry (never token hashes) — Build 24 |
   | POST | `/auth/invitations/:id/revoke` | **(auth: owner)** | `204` — revoke a pending invite (not an accepted one; cross-tenant → 403) |
-  | POST | `/auth/password-reset/request` | `{email}` | `200 {}` — identical whether the email exists; token emailed (dev-echoed) |
+  | POST | `/auth/password-reset/request` | `{email}` | `200 {}` — identical whether the email exists; token delivered via NotificationPort (dev-echoed only) |
   | POST | `/auth/password-reset/confirm` | `{resetToken,password}` | `204` — set new password + revoke ALL sessions (fresh login) |
   | GET | `/auth/sessions` | **(auth)** | `{sessions:[…]}` — own live sessions (id/createdAt/lastUsedAt/deviceLabel; no refresh tokens) |
   | DELETE | `/auth/sessions/:id` | **(auth)** | `204` — revoke one of your OWN sessions (others' → 403) |
@@ -111,6 +111,15 @@ export const orderGateway = makeHttpOrderGateway(httpOrderPort({
   getToken: () => session.token,   // opaque token from your auth; UI never sees a tenant
 }));
 ```
+
+## Notification delivery (Build 26)
+
+Invite + password-reset tokens leave through one seam — `NotificationPort`
+(`sendInvitation`/`sendPasswordReset`), injected via `AuthDeps.notifications`. Bootstrap wires
+`consoleNotificationPort` (structured, token-free, masked recipient); swap in an SMTP/SES impl
+(same interface) for real email — nothing else changes. The route delivers **best-effort +
+isolated**: a send failure logs `notification_failed` (token-free) and never fails the auth op
+or changes the enumeration-safe response. `makeAuthService` never knows how email is delivered.
 
 ## Scope / limits (honest)
 

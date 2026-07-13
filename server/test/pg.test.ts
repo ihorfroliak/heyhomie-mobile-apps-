@@ -273,6 +273,27 @@ async function main() {
         ok('deleted user removed from pg', (await pool.query('SELECT count(*)::int AS c FROM users WHERE id = $1', [lifeId])).rows[0].c === 0);
         ok('deleted user sessions cascaded from pg (FK ON DELETE CASCADE)', (await pool.query('SELECT count(*)::int AS c FROM auth_sessions WHERE user_id = $1', [lifeId])).rows[0].c === 0);
         ok('email freed after delete over pg', (await svc.register({ email: 'life@pg.pl', password: 'Fresh12345' })).identity.role === 'owner');
+
+        // ── Build 26: NotificationPort delivery over real pg (HTTP + spy port) ──
+        {
+            const sent: string[] = [];
+            const spyPort = {
+                async sendInvitation(m: { email: string }) { sent.push(`invitation:${m.email}`); },
+                async sendPasswordReset(m: { email: string }) { sent.push(`password_reset:${m.email}`); },
+            };
+            const jsonH = { 'content-type': 'application/json' };
+            const cfg = loadServerConfig({ DATABASE_URL: PG_URL, AUTH_SECRET: 'pg-notif-secret-16chars', PORT: '8096', AUTH_DEV_MODE: '1' });
+            const np = makePool(PG_URL);
+            const { app } = buildApp(cfg, pgOrderRepo(np), async () => { await np.query('SELECT 1'); }, { repo: pgAuthRepo(np), crypto: makeAuthCrypto('pg-notif-secret-16chars', 900), notifications: spyPort });
+            await app.listen({ port: 0, host: '127.0.0.1' });
+            const nb = `http://127.0.0.1:${(app.server.address() as { port: number }).port}`;
+            const reg = await (await fetch(`${nb}/auth/register`, { method: 'POST', headers: jsonH, body: JSON.stringify({ email: 'notif@pg.pl', password: 'NotifOwner1!' }) })).json() as { accessToken: string };
+            await fetch(`${nb}/auth/invite`, { method: 'POST', headers: { ...jsonH, authorization: `Bearer ${reg.accessToken}` }, body: JSON.stringify({ email: 'notif-w@pg.pl', role: 'worker' }) });
+            await fetch(`${nb}/auth/password-reset/request`, { method: 'POST', headers: jsonH, body: JSON.stringify({ email: 'notif@pg.pl' }) });
+            ok('invite delivery fired via the port over pg', sent.includes('invitation:notif-w@pg.pl'));
+            ok('password-reset delivery fired via the port over pg', sent.includes('password_reset:notif@pg.pl'));
+            await app.close(); await np.end();
+        }
     }
 
     await pool.end();

@@ -60,7 +60,14 @@ async function main() {
     // AUTH_DEV_MODE=1 so /auth/password-reset/request echoes the token (local only,
     // same gate as /dev/token) — lets the e2e complete the reset flow without email.
     const config = loadServerConfig({ DATABASE_URL: 'postgres://unused/e2e', AUTH_SECRET, PORT: '8092', AUTH_DEV_MODE: '1' });
-    const authDeps = { repo: memoryAuthRepo(), crypto: makeAuthCrypto(AUTH_SECRET, config.accessTtlSec) };
+    // Spy NotificationPort — records every delivery (with its raw token) so the e2e
+    // can prove the SAME minted token is handed to delivery.
+    const sent: { type: string; email: string; token: string }[] = [];
+    const spyPort = {
+        async sendInvitation(m: { email: string; inviteToken: string }) { sent.push({ type: 'invitation', email: m.email, token: m.inviteToken }); },
+        async sendPasswordReset(m: { email: string; resetToken: string }) { sent.push({ type: 'password_reset', email: m.email, token: m.resetToken }); },
+    };
+    const authDeps = { repo: memoryAuthRepo(), crypto: makeAuthCrypto(AUTH_SECRET, config.accessTtlSec), notifications: spyPort };
     const { app } = buildApp(config, memoryOrderRepo(), async () => { /* memory db up */ }, authDeps);
     await app.listen({ port: 0, host: '127.0.0.1' });
     const base = `http://127.0.0.1:${(app.server.address() as { port: number }).port}`;
@@ -215,6 +222,32 @@ async function main() {
     ok('deleted member removed from the roster', !(await authClient.listMembers()).some(m => m.id === memberRow!.id));
     let deletedLogin = false; try { await createAuthClient({ baseUrl: base, store: memorySecureStore() }).login('lifecycle@e2e.pl', 'LifeMemberP1'); } catch { deletedLogin = true; }
     ok('deleted member cannot log in', deletedLogin);
+
+    // ── Build 26: NotificationPort delivery (spy) ──
+    // The invite + reset flows above fired the port; the SAME minted token reached delivery.
+    ok('invitation was delivered via the port (token handed off)', sent.some(s => s.type === 'invitation' && s.email === 'member@e2e.pl' && s.token === invite.inviteToken));
+    ok('password reset was delivered via the port (token handed off)', sent.some(s => s.type === 'password_reset' && s.email === 'reset@e2e.pl' && s.token === reqRes.resetToken));
+
+    // Failure isolation: a throwing port must NOT break the auth op (invite still
+    // returns its token; reset still 200). Boot a second app with a failing port.
+    {
+        const throwPort = {
+            async sendInvitation() { throw new Error('smtp down'); },
+            async sendPasswordReset() { throw new Error('smtp down'); },
+        };
+        const cfg2 = loadServerConfig({ DATABASE_URL: 'postgres://unused/e2e2', AUTH_SECRET, PORT: '8092', AUTH_DEV_MODE: '1' });
+        const { app: app2 } = buildApp(cfg2, memoryOrderRepo(), async () => {}, { repo: memoryAuthRepo(), crypto: makeAuthCrypto(AUTH_SECRET, cfg2.accessTtlSec), notifications: throwPort });
+        await app2.listen({ port: 0, host: '127.0.0.1' });
+        const b2 = `http://127.0.0.1:${(app2.server.address() as { port: number }).port}`;
+        const o = createAuthClient({ baseUrl: b2, store: memorySecureStore() });
+        await o.register('iso@e2e.pl', 'IsoOwnerP1!');
+        let inviteOk = false;
+        try { const r = await o.invite('iso-w@e2e.pl', 'worker'); inviteOk = typeof r.inviteToken === 'string'; } catch { inviteOk = false; }
+        ok('invite succeeds despite a failing notification port (isolated)', inviteOk);
+        const resetStatus = (await fetch(`${b2}/auth/password-reset/request`, { method: 'POST', headers: jh, body: JSON.stringify({ email: 'iso@e2e.pl' }) })).status;
+        ok('password-reset request still 200 despite a failing port', resetStatus === 200);
+        await app2.close();
+    }
 
     // 7) LOGOUT → tokens gone → requests rejected
     await authClient.logout();
