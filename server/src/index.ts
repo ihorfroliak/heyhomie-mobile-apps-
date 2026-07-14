@@ -28,10 +28,24 @@ async function main() {
     // NotificationPort delivers invite/reset tokens. Console until a real provider
     // (SMTP/SES/SendGrid) implements the same port — the ONLY delivery abstraction.
     const authDeps = { repo: pgAuthRepo(pool), crypto: makeAuthCrypto(config.authSecret, config.accessTtlSec), notifications: consoleNotificationPort(), audit: pgAuditPort(pool) };
-    const { app, beginShutdown } = buildApp(config, pgOrderRepo(pool), async () => { await pool.query('SELECT 1'); }, authDeps);
+    const { app, beginShutdown, purgeExpired } = buildApp(config, pgOrderRepo(pool), async () => { await pool.query('SELECT 1'); }, authDeps);
     const DRAIN_MS = config.shutdownDrainMs; // validated at boot (fail-fast, C2)
 
     await app.listen({ port: config.port, host: '0.0.0.0' });
+
+    // Retention sweep (Build 28): purge expired auth rows so auth_sessions (grows one
+    // row per refresh) + invitations + password_resets can't accumulate unbounded.
+    // Best-effort; a sweep error is logged, never fatal. 0 = disabled.
+    let purgeTimer: ReturnType<typeof setInterval> | undefined;
+    if (purgeExpired && config.purgeIntervalSec > 0) {
+        const sweep = async () => {
+            try { app.log.info({ event: 'auth_purge', ...(await purgeExpired()) }, 'retention sweep'); }
+            catch (e) { app.log.error({ event: 'auth_purge_failed' }, 'retention sweep failed'); void e; }
+        };
+        void sweep(); // once at boot
+        purgeTimer = setInterval(() => void sweep(), config.purgeIntervalSec * 1000);
+        purgeTimer.unref?.(); // never keep the process alive for the sweep
+    }
 
     // Startup diagnostics — exactly once, no secrets.
     let version = '0.0.0';
@@ -56,6 +70,7 @@ async function main() {
         shuttingDownStarted = true;
         const t0 = Date.now();
         app.log.info({ signal, drainMs: DRAIN_MS }, 'shutdown_started');
+        if (purgeTimer) clearInterval(purgeTimer);
         try {
             // 1) flip readiness → 503 so the LB/orchestrator stops routing new traffic
             beginShutdown();

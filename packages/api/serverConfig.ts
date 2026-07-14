@@ -24,6 +24,8 @@ export interface ServerConfig {
     inviteTtlSec: number;
     /** Password-reset token TTL (sec) — short-lived, single-use (Build 24). */
     resetTtlSec: number;
+    /** Retention sweep interval (sec) — purge expired auth rows; 0 = disabled (Build 28). */
+    purgeIntervalSec: number;
 }
 
 export class ConfigError extends Error {
@@ -88,6 +90,11 @@ export function loadServerConfig(env: Record<string, string | undefined>): Serve
     const resetTtlSec = resetRaw ? Number(resetRaw) : 3_600; // 1 hour
     if (!Number.isInteger(resetTtlSec) || resetTtlSec < 1) issues.push(`AUTH_RESET_TTL_SEC must be a positive integer seconds (got "${env.AUTH_RESET_TTL_SEC}")`);
 
+    // 0 = disabled. Non-negative integer seconds (retention sweep cadence).
+    const purgeRaw = env.AUTH_PURGE_INTERVAL_SEC?.trim();
+    const purgeIntervalSec = purgeRaw ? Number(purgeRaw) : 3_600; // 1 hour
+    if (!Number.isInteger(purgeIntervalSec) || purgeIntervalSec < 0) issues.push(`AUTH_PURGE_INTERVAL_SEC must be a non-negative integer seconds (got "${env.AUTH_PURGE_INTERVAL_SEC}")`);
+
     if (issues.length) throw new ConfigError(issues);
-    return { databaseUrl: databaseUrl as string, port, authSecret: authSecret as string, devMode, production, trustProxy, rateCapacity, rateRefillPerSec, shutdownDrainMs, accessTtlSec, refreshTtlSec, inviteTtlSec, resetTtlSec };
+    return { databaseUrl: databaseUrl as string, port, authSecret: authSecret as string, devMode, production, trustProxy, rateCapacity, rateRefillPerSec, shutdownDrainMs, accessTtlSec, refreshTtlSec, inviteTtlSec, resetTtlSec, purgeIntervalSec };
 }

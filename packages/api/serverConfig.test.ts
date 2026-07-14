@@ -46,6 +46,9 @@ eq('invite TTL default 7d', cfg.inviteTtlSec, 604_800);
 ok('invalid AUTH_INVITE_TTL_SEC rejected', issues({ ...good, AUTH_INVITE_TTL_SEC: '7d' }).some(i => i.includes('AUTH_INVITE_TTL_SEC')));
 eq('reset TTL default 1h', cfg.resetTtlSec, 3_600);
 ok('invalid AUTH_RESET_TTL_SEC rejected', issues({ ...good, AUTH_RESET_TTL_SEC: '1h' }).some(i => i.includes('AUTH_RESET_TTL_SEC')));
+eq('purge interval default 1h', cfg.purgeIntervalSec, 3_600);
+eq('purge interval 0 = disabled (allowed)', loadServerConfig({ ...good, AUTH_PURGE_INTERVAL_SEC: '0' }).purgeIntervalSec, 0);
+ok('invalid AUTH_PURGE_INTERVAL_SEC rejected', issues({ ...good, AUTH_PURGE_INTERVAL_SEC: '-1' }).some(i => i.includes('AUTH_PURGE_INTERVAL_SEC')));
 
 // aggregates ALL problems, not just the first
 ok('reports every issue at once', issues({ PORT: 'x' }).length >= 3);

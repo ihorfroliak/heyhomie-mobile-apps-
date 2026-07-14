@@ -162,6 +162,12 @@ export interface AuthRepo {
     insertPasswordReset(pr: PasswordReset): Promise<void>;
     findPasswordResetByTokenHash(hash: string): Promise<PasswordReset | undefined>;
     markPasswordResetUsed(id: string, at: string): Promise<void>;
+    // Retention / GC (Build 28) — hard-delete capability rows past their expiry.
+    // Safe: once `expiresAt < now`, a token can never validate (expiry is checked
+    // before reuse), so the row is inert. Each returns the number of rows removed.
+    purgeExpiredSessions(before: string): Promise<number>;
+    purgeExpiredInvitations(before: string): Promise<number>;
+    purgeExpiredPasswordResets(before: string): Promise<number>;
 }
 
 /** Crypto port — the ONLY place node:crypto is used (server-side impl). Injected
@@ -253,7 +259,14 @@ export interface AuthService {
     deleteUser(userId: string, auth: AuthContext): Promise<void>;
     /** Owner/admin: the tenant's privileged-action audit trail (no secrets). */
     listAuditEvents(auth: AuthContext, limit?: number): Promise<AuditEventView[]>;
+    /** Maintenance (Build 28): hard-delete every capability row past its expiry
+     *  (sessions / invitations / password-resets). Idempotent, no auth — it removes
+     *  only inert rows and keeps live ones. Returns counts for observability. */
+    purgeExpired(): Promise<PurgeResult>;
 }
+
+/** Rows removed by a retention sweep (Build 28). */
+export interface PurgeResult { sessions: number; invitations: number; passwordResets: number; }
 
 /**
  * The authoritative credential/session engine. Pure orchestration over the two
@@ -526,6 +539,16 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             if (auth.role !== 'owner' && auth.role !== 'admin') throw new ForbiddenError('insufficient role');
             return audit.listByTenant(auth.tenantId, limit);
         },
+
+        async purgeExpired() {
+            const before = iso(now());
+            const [sessions, invitations, passwordResets] = await Promise.all([
+                repo.purgeExpiredSessions(before),
+                repo.purgeExpiredInvitations(before),
+                repo.purgeExpiredPasswordResets(before),
+            ]);
+            return { sessions, invitations, passwordResets };
+        },
     };
 
     /** Owner-only target resolver: cross-tenant / missing / self are all denied the
@@ -611,6 +634,21 @@ export function memoryAuthRepo(): AuthRepo {
         async markPasswordResetUsed(id, at) {
             const pr = resetsById.get(id);
             if (pr && !pr.usedAt) pr.usedAt = at;
+        },
+        async purgeExpiredSessions(before) {
+            let n = 0;
+            for (const s of [...sessionsById.values()]) if (s.expiresAt < before) { sessionsById.delete(s.id); sessionsByHash.delete(s.refreshHash); n++; }
+            return n;
+        },
+        async purgeExpiredInvitations(before) {
+            let n = 0;
+            for (const inv of [...invitesById.values()]) if (inv.expiresAt < before) { invitesById.delete(inv.id); invitesByHash.delete(inv.tokenHash); n++; }
+            return n;
+        },
+        async purgeExpiredPasswordResets(before) {
+            let n = 0;
+            for (const pr of [...resetsById.values()]) if (pr.expiresAt < before) { resetsById.delete(pr.id); resetsByHash.delete(pr.tokenHash); n++; }
+            return n;
         },
     };
 }

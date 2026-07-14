@@ -316,6 +316,21 @@ async function main() {
             ok('GET /auth/audit returns the trail over pg (no secrets)', auditResp.events.some(e => e.type === 'member.invited') && !/token|hash|password/i.test(JSON.stringify(auditResp)));
             await app.close(); await ap.end();
         }
+
+        // ── Build 28: retention purge over real pg (expired removed, live kept) ──
+        {
+            const pu = await svc.register({ email: 'purge@pg.pl', password: 'PurgeOwn1!' });
+            const uid = pu.identity.userId, tid = pu.identity.tenantId;
+            const past = new Date(Date.now() - 3_600_000).toISOString();
+            await pool.query(`INSERT INTO auth_sessions (id,user_id,tenant_id,role,refresh_hash,expires_at,created_at,last_used_at) VALUES ('exp-s',$1,$2,'worker','rh-exp',$3,$3,$3)`, [uid, tid, past]);
+            await pool.query(`INSERT INTO invitations (id,tenant_id,email,role,token_hash,invited_by,expires_at,created_at) VALUES ('exp-i',$1,'e@x.co','worker','th-exp',$2,$3,$3)`, [tid, uid, past]);
+            await pool.query(`INSERT INTO password_resets (id,user_id,email,token_hash,expires_at,created_at) VALUES ('exp-r',$1,'e@x.co','th-exp',$2,$2)`, [uid, past]);
+            const res = await svc.purgeExpired();
+            ok('purge removed expired session/invite/reset over pg', res.sessions >= 1 && res.invitations >= 1 && res.passwordResets >= 1);
+            ok('expired session gone from pg', (await pool.query(`SELECT count(*)::int AS c FROM auth_sessions WHERE id='exp-s'`)).rows[0].c === 0);
+            ok('expired invitation gone from pg', (await pool.query(`SELECT count(*)::int AS c FROM invitations WHERE id='exp-i'`)).rows[0].c === 0);
+            ok('the live register session survived the purge over pg', (await pool.query(`SELECT count(*)::int AS c FROM auth_sessions WHERE user_id=$1 AND expires_at > now()`, [uid])).rows[0].c >= 1);
+        }
     }
 
     await pool.end();

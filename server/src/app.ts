@@ -18,6 +18,9 @@ export interface BuiltApp {
     metrics: ServerMetrics;
     /** Flip readiness to 503 (SIGTERM → LB stops routing + drains, then close). */
     beginShutdown: () => void;
+    /** Retention sweep (Build 28) — present only when auth is wired. The bootstrap
+     *  owns the schedule; tests call it directly. Deletes only expired (inert) rows. */
+    purgeExpired?: () => Promise<import('@heyhomie/api').PurgeResult>;
 }
 
 /** Optional auth wiring — injected like the OrderRepo (real crypto+pg in prod,
@@ -166,11 +169,13 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
     // Auth issuer routes (Build 18) must be registered BEFORE the authenticate
     // preHandler is a no-op for them (they're in isPublic) — but register them
     // here so they exist. The pure AuthService orchestrates over injected crypto+repo.
+    let purgeExpired: BuiltApp['purgeExpired'];
     if (authDeps) {
         // access-TTL is baked into the crypto adapter (makeAuthCrypto); the service
         // only owns the refresh lifetime.
         const authService = makeAuthService(authDeps.repo, authDeps.crypto, { refreshTtlSec: config.refreshTtlSec, inviteTtlSec: config.inviteTtlSec, resetTtlSec: config.resetTtlSec, audit: authDeps.audit });
         registerAuthRoutes(app, authService, { devMode: config.devMode, notifications: authDeps.notifications });
+        purgeExpired = () => authService.purgeExpired();
     }
 
     app.addHook('preHandler', authenticateRequest(config.authSecret, config.devMode));
@@ -179,5 +184,5 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
     registerRoutes(app, service, idem);
     registerStream(app, service, metrics, sseSockets);
 
-    return { app, metrics, beginShutdown: () => { shuttingDown = true; } };
+    return { app, metrics, beginShutdown: () => { shuttingDown = true; }, purgeExpired };
 }

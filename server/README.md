@@ -113,6 +113,14 @@ export const orderGateway = makeHttpOrderGateway(httpOrderPort({
 }));
 ```
 
+## Retention sweep (Build 28)
+
+`auth_sessions` gains a row on every refresh (kept for reuse-detection); expired
+`invitations`/`password_resets` also accumulate. The bootstrap runs `AuthService.purgeExpired()`
+at boot + every `AUTH_PURGE_INTERVAL_SEC` (default 1h; 0 = disabled; `unref`'d timer, cleared on
+shutdown), hard-deleting only rows past `expires_at` (a past-expiry token can never validate — safe;
+live rows are never touched). `audit_log` is exempt (compliance retention). No migration.
+
 ## Audit trail (Build 27)
 
 Every privileged auth/account-lifecycle action (invite / revoke / join / disable / enable /

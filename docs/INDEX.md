@@ -47,7 +47,7 @@ Full diagram: [PROJECT_STATE.md §2](PROJECT_STATE.md).
 | [fakeBackend.ts](../packages/api/fakeBackend.ts) | In-process port over real `orderService` — lets contract test run http path w/o a server. |
 | [orderService.ts](../packages/api/orderService.ts) | Authoritative engine: transitions + tenant enforcement + repo-injected (`memoryOrderRepo`). |
 | [auth.ts](../packages/api/auth.ts) | Pure `AuthContext`, `FORBIDDEN_TENANT_ACCESS`, `requireOwned`. No crypto (RN-safe). |
-| [authSession.ts](../packages/api/authSession.ts) | **The single auth engine** (Builds 18–25): pure `makeAuthService` (`AuthRepo`+`AuthCrypto`) + `memoryAuthRepo`. register/login/refresh/logout · invite/accept/revokeInvite/listInvitations · password reset · session mgmt (`revokedReason`) · **account lifecycle** listMembers/disableUser/enableUser/deleteUser (`ownerTarget` deny-by-default resolver). Views omit hashes. No crypto (RN-safe). |
+| [authSession.ts](../packages/api/authSession.ts) | **The single auth engine** (Builds 18–28): pure `makeAuthService` (`AuthRepo`+`AuthCrypto`) + `memoryAuthRepo`. register/login/refresh/logout · invite/accept/revokeInvite/listInvitations · password reset · session mgmt (`revokedReason`) · account lifecycle (`ownerTarget` resolver) · audit emit (`AuditPort`) · **`purgeExpired`** retention sweep. Views omit hashes. No crypto (RN-safe). |
 | [bookingStore.ts](../packages/api/bookingStore.ts) | PRIVATE mock store (AsyncStorage-durable). NOT exported from barrel. Don't import in UI. |
 | [index.ts](../packages/api/index.ts) | Barrel. Exports contract/gateway/auth/service/fake — NOT the store. |
 
@@ -147,7 +147,9 @@ migration v8 `users.disabled_at`; disabled→login/refresh/reset blocked; delete
 sessions+invites + cascades). **26** `NotificationPort` — the one delivery seam for
 invite/reset tokens (best-effort + isolated, token-free logs). **27** `AuditPort` —
 the one accountability seam (migration v9 `audit_log`; every privileged action emits
-an event; `GET /auth/audit`; no secrets); no contract change.
+an event; `GET /auth/audit`; no secrets). **28** retention sweep — `purgeExpired()`
+hard-deletes expired sessions/invites/resets (`auth_sessions` grows per refresh);
+scheduled from bootstrap (`AUTH_PURGE_INTERVAL_SEC`); no migration, no contract change.
 Every "verified" build surfaced ≥1 real defect only reachable
 by executing the real path — details + measured evidence in [BUILD_HISTORY.md](BUILD_HISTORY.md).
 

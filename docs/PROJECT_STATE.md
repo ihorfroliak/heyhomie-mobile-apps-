@@ -149,6 +149,18 @@ UI (apps/*)  ──imports only──►  orderGateway  (packages/api/orderContr
      of violating:** an un-auditable privileged path = a forensic blind spot + a compliance gap.
      Read via `GET /auth/audit` (owner/admin, tenant-scoped). A real SIEM/log-shipper is just another
      `AuditPort` impl.
+     9. **Retention sweep for durable capability rows** (Build 28) — any table of *expiring* rows
+     (sessions/invitations/password-resets; `auth_sessions` grows one row **per refresh**) MUST be
+     purged by `AuthService.purgeExpired()`, scheduled from the bootstrap (`AUTH_PURGE_INTERVAL_SEC`,
+     `unref`'d, cleared on shutdown). **Invariant it protects:** bounded storage — an unswept token
+     table silently grows until it degrades the DB. **Safe to delete:** only rows where
+     `expires_at < now` — a past-expiry token can never validate (expiry is checked BEFORE reuse), so
+     the row is inert; **never delete live/unexpired rows** (would revoke real sessions). **Never
+     bypass by:** ad-hoc `DELETE`s in a route, or purging by anything other than `expires_at`.
+     **`audit_log` is EXEMPT** (accountability/compliance — separate, longer retention policy).
+     Mirrors the in-memory sweep convention already in `idempotency.ts`/`rateLimiter.ts`, extended to
+     durable rows. **Consequence of violating:** unbounded table growth (perf/disk) or, if you delete
+     live rows, mass unintended logout.
 - **Client auth (Build 20/21/22)**: `authClient.ts` (sync `getToken`, `authFetch` refresh-on-401,
   login/register/refresh/logout/bootstrap); **all three apps** (client/admin/worker) authenticate
   + gate to `/login` + consume `orderGateway`; tokens live in **expo-secure-store**. Apps never

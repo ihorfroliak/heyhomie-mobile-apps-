@@ -162,5 +162,14 @@ export function pgAuthRepo(pool: Pool): AuthRepo {
         async markPasswordResetUsed(id, at) {
             await pool.query('UPDATE password_resets SET used_at = $2 WHERE id = $1 AND used_at IS NULL', [id, at]);
         },
+        async purgeExpiredSessions(before) {
+            return (await pool.query('DELETE FROM auth_sessions WHERE expires_at < $1', [before])).rowCount ?? 0;
+        },
+        async purgeExpiredInvitations(before) {
+            return (await pool.query('DELETE FROM invitations WHERE expires_at < $1', [before])).rowCount ?? 0;
+        },
+        async purgeExpiredPasswordResets(before) {
+            return (await pool.query('DELETE FROM password_resets WHERE expires_at < $1', [before])).rowCount ?? 0;
+        },
     };
 }

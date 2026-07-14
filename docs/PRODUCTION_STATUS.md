@@ -10,11 +10,11 @@ Latest build → [BUILD_HISTORY.md](BUILD_HISTORY.md). Gate (`npm run check`): a
 | Correctness/Concurrency | 84 | 100-parallel exactly-once (real pg), property tests, terminal invariants + DB CHECK |
 | Security | 91 | credential auth issuer (scrypt, access+refresh, single-use rotation w/ reuse-detection, enumeration-safe), per-user accounts + owner invites (Build 23), account lifecycle — password reset + session mgmt + invitation list/revoke (Build 24) + owner disable/enable/delete (Build 25), **privileged-action audit trail** (accountability for every owner action; no secrets logged — Build 27), encrypted mobile token storage + route gate (Build 21), HMAC token exp+skew, tenant isolation (service+repo+CHECK; apps never see role/tenant), rate-limit hardened, redaction, no SQL/JSON injection (parameterized) |
 | Observability | 84 | Prometheus `/metrics`, correlation ids end-to-end, structured logs, incident playbook, **privileged-action audit trail** (`AuditPort` → `audit_log`; who did what to whom — Build 27) |
-| Operations | 81 | k8s graceful shutdown, rolling deploy, backup/restore, health probes — all measured |
+| Operations | 86 | k8s graceful shutdown, rolling deploy, backup/restore, health probes — all measured; **auth-data retention sweep** (purges expired sessions/invites/resets so `auth_sessions` can't grow unbounded — Build 28) |
 | Deployment | 85 | docker build + compose healthy + restart verified; non-root, reproducible build |
 | Infrastructure | 78 | containerized stack proven; single-instance (multi-instance needs shared state) |
 | Maintainability | 87 | clean layering, anti-dep guard, frozen contract, docs; server typecheck now clean + gated (Build 19) |
-| Testability | 95 | 760 gated assertions + live/e2e/pg/ops/load/repro harnesses; CI runs the strongest suites — `test:pg`+`test:ops` (real pg), `test:live`, `test:e2e` (auth lifecycle + NotificationPort + audit trail), `typecheck:server`; one-command `verify:full`. Mobile UI not machine-run (no Expo runtime) — auth + gateway logic proven via e2e + gate tests |
+| Testability | 95 | 768 gated assertions + live/e2e/pg/ops/load/repro harnesses; CI runs the strongest suites — `test:pg`+`test:ops` (real pg), `test:live`, `test:e2e` (auth lifecycle + NotificationPort + audit + retention), `typecheck:server`; one-command `verify:full`. Mobile UI not machine-run (no Expo runtime) — auth + gateway logic proven via e2e + gate tests |
 | Scalability | ~50 | DB indexed/efficient; SSE full-snapshot + unpaginated list are the ceilings |
 
 ## Performance baseline (Build 13, measured on real Postgres via `test:load`)
@@ -44,6 +44,12 @@ Capability tokens (invite / password-reset) leave through one seam — `Notifica
 (`packages/api/notificationPort.ts`). `consoleNotificationPort` (token-free structured logs)
 is wired in prod bootstrap today; swap in an SMTP/SES/SendGrid impl (same interface) for real
 email. Delivery is best-effort + isolated; tokens/hashes are never logged.
+
+## Retention / GC (Build 28)
+`AuthService.purgeExpired()` hard-deletes auth rows past `expires_at` (sessions / invitations /
+password-resets — `auth_sessions` grows one row per refresh). Scheduled from the bootstrap
+(`AUTH_PURGE_INTERVAL_SEC`, default 1h; 0 = disabled). Safe (past-expiry tokens can't validate);
+never touches live rows; `audit_log` is exempt (compliance). No migration, no contract change.
 
 ## Accountability / audit (Build 27)
 Every privileged owner/account-lifecycle action emits an `AuditPort` event (`packages/api/auditPort.ts`)

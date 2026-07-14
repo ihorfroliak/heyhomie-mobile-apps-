@@ -269,6 +269,27 @@ async function main() {
         ok('a failing audit sink does not fail the auth op (isolated)', isolated);
     }
 
+    // ── Build 28: retention purge — expired rows removed, live rows kept ──
+    {
+        let c = 6_000_000_000_000;
+        const repo6 = memoryAuthRepo();
+        const svc6 = makeAuthService(repo6, fakeCrypto(), { refreshTtlSec: 100, inviteTtlSec: 100, resetTtlSec: 100, now: () => c });
+        const owner = await svc6.register({ email: 'p-own@x.com', password: 'ownerpass1' }); // session (expires +100s)
+        const iv = await svc6.invite({ email: 'p-w@x.com', role: 'worker' }, owner.identity); // invite (+100s)
+        await svc6.requestPasswordReset({ email: 'p-own@x.com' }); // reset (+100s)
+        const p0 = await svc6.purgeExpired();
+        ok('nothing purged while everything is live', p0.sessions === 0 && p0.invitations === 0 && p0.passwordResets === 0);
+
+        c += 100 * 1000 + 1; // past every TTL
+        const fresh = await svc6.login({ email: 'p-own@x.com', password: 'ownerpass1' }); // a NEW live session
+        const p1 = await svc6.purgeExpired();
+        ok('purge removed the expired session/invite/reset', p1.sessions >= 1 && p1.invitations === 1 && p1.passwordResets === 1);
+        ok('a live session survives the purge (still refreshes)', !!(await svc6.refresh(fresh.refreshToken)).accessToken);
+        await throws('a purged (expired) invite is no longer acceptable', 'UNAUTHENTICATED', () => svc6.accept({ inviteToken: iv.inviteToken, password: 'wpass12345' }));
+        const p2 = await svc6.purgeExpired();
+        ok('purge is idempotent (second run removes nothing new)', p2.invitations === 0 && p2.passwordResets === 0);
+    }
+
     console.log(`\n${passed} passed, ${fail.length} failed`);
     if (fail.length) { fail.forEach(f => console.log('  FAIL: ' + f)); process.exit(1); }
     console.log('All authSession tests passed.');

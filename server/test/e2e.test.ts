@@ -68,7 +68,7 @@ async function main() {
         async sendPasswordReset(m: { email: string; resetToken: string }) { sent.push({ type: 'password_reset', email: m.email, token: m.resetToken }); },
     };
     const authDeps = { repo: memoryAuthRepo(), crypto: makeAuthCrypto(AUTH_SECRET, config.accessTtlSec), notifications: spyPort, audit: memoryAuditPort() };
-    const { app } = buildApp(config, memoryOrderRepo(), async () => { /* memory db up */ }, authDeps);
+    const { app, purgeExpired } = buildApp(config, memoryOrderRepo(), async () => { /* memory db up */ }, authDeps);
     await app.listen({ port: 0, host: '127.0.0.1' });
     const base = `http://127.0.0.1:${(app.server.address() as { port: number }).port}`;
 
@@ -264,6 +264,10 @@ async function main() {
     let auditForbidden = false;
     try { await probe.listAuditEvents(); } catch { auditForbidden = true; }
     ok('a non-privileged worker cannot read the audit trail', auditForbidden);
+
+    // ── Build 28: retention sweep is wired + callable (nothing expired yet → 0s) ──
+    const purged = await purgeExpired!();
+    ok('purgeExpired is callable and returns numeric counts', typeof purged.sessions === 'number' && typeof purged.invitations === 'number' && typeof purged.passwordResets === 'number');
 
     // 7) LOGOUT → tokens gone → requests rejected
     await authClient.logout();
