@@ -6,7 +6,7 @@
  */
 import Fastify, { type FastifyInstance } from 'fastify';
 import {
-    makeOrderService, makeAuthService, fromUnknown, AppError, RateLimiter, RateLimitedError, IdempotencyStore,
+    makeOrderService, makeAuthService, fromUnknown, AppError, RateLimiter, RateLimitedError, IdempotencyStore, RevocationIndex,
     type AuthContext, type AuthRepo, type AuthCrypto, type NotificationPort, type AuditPort, type Role, type OrderRepo, type ServerConfig, type SubmitOrderResult,
 } from '@heyhomie/api';
 import { registerRoutes, registerStream, registerAuthRoutes } from './routes.js';
@@ -21,6 +21,9 @@ export interface BuiltApp {
     /** Retention sweep (Build 28) — present only when auth is wired. The bootstrap
      *  owns the schedule; tests call it directly. Deletes only expired (inert) rows. */
     purgeExpired?: () => Promise<import('@heyhomie/api').PurgeResult>;
+    /** Instant access-token revocation index (Build 29) — present only when auth is
+     *  wired. The bootstrap seeds it from durable state at boot (restart safety). */
+    revocations?: RevocationIndex;
 }
 
 /** Optional auth wiring — injected like the OrderRepo (real crypto+pg in prod,
@@ -170,19 +173,25 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
     // preHandler is a no-op for them (they're in isPublic) — but register them
     // here so they exist. The pure AuthService orchestrates over injected crypto+repo.
     let purgeExpired: BuiltApp['purgeExpired'];
+    let revocations: RevocationIndex | undefined;
     if (authDeps) {
+        // One RevocationIndex feeds both sides (Build 29): the auth ENGINE writes
+        // to it (disable/delete/reset/logout/theft) and the auth MIDDLEWARE reads
+        // it per request — O(1), no DB on the hot path. Entries only matter for one
+        // access-TTL (+skew); after that the token is expired anyway.
+        revocations = new RevocationIndex({ ttlSec: config.accessTtlSec + 120 });
         // access-TTL is baked into the crypto adapter (makeAuthCrypto); the service
         // only owns the refresh lifetime.
-        const authService = makeAuthService(authDeps.repo, authDeps.crypto, { refreshTtlSec: config.refreshTtlSec, inviteTtlSec: config.inviteTtlSec, resetTtlSec: config.resetTtlSec, audit: authDeps.audit });
+        const authService = makeAuthService(authDeps.repo, authDeps.crypto, { refreshTtlSec: config.refreshTtlSec, inviteTtlSec: config.inviteTtlSec, resetTtlSec: config.resetTtlSec, audit: authDeps.audit, revocations });
         registerAuthRoutes(app, authService, { devMode: config.devMode, notifications: authDeps.notifications });
         purgeExpired = () => authService.purgeExpired();
     }
 
-    app.addHook('preHandler', authenticateRequest(config.authSecret, config.devMode));
+    app.addHook('preHandler', authenticateRequest(config.authSecret, config.devMode, revocations));
     // Create-dedup store (Build 17): 10-min TTL, tenant-scoped by the route.
     const idem = new IdempotencyStore<SubmitOrderResult>();
     registerRoutes(app, service, idem);
     registerStream(app, service, metrics, sseSockets);
 
-    return { app, metrics, beginShutdown: () => { shuttingDown = true; }, purgeExpired };
+    return { app, metrics, beginShutdown: () => { shuttingDown = true; }, purgeExpired, revocations };
 }

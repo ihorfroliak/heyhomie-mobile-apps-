@@ -19,6 +19,7 @@
 import type { AuthContext, Role } from './auth';
 import { ValidationError, UnauthorizedError, ConflictError, ForbiddenError } from './errors';
 import { nullAuditPort, type AuditPort, type AuditEvent, type AuditEventView } from './auditPort';
+import type { RevocationIndex } from './revocation';
 
 /** A credential-holder. `passwordHash`/`passwordSalt` are opaque to this module
  *  (the injected AuthCrypto owns their format). A user owns exactly one tenant. */
@@ -168,6 +169,10 @@ export interface AuthRepo {
     purgeExpiredSessions(before: string): Promise<number>;
     purgeExpiredInvitations(before: string): Promise<number>;
     purgeExpiredPasswordResets(before: string): Promise<number>;
+    /** Boot seeding for the RevocationIndex (Build 29): users disabled and sessions
+     *  DELIBERATELY revoked (reason 'revoked', not rotation) since `since` — one
+     *  access-TTL window is enough (older tokens are already expired). */
+    listRecentRevocations(since: string): Promise<{ users: { id: string; at: string }[]; sessions: { id: string; at: string }[] }>;
 }
 
 /** Crypto port — the ONLY place node:crypto is used (server-side impl). Injected
@@ -177,8 +182,9 @@ export interface AuthCrypto {
     newId(): string;
     hashPassword(password: string): { hash: string; salt: string };
     verifyPassword(password: string, hash: string, salt: string): boolean;
-    /** Mint the existing HMAC access token for an identity. */
-    mintAccess(identity: AuthContext): { token: string; expiresIn: number };
+    /** Mint the existing HMAC access token for an identity. `sid` (Build 29)
+     *  binds it to the issuing refresh session for per-session revocation. */
+    mintAccess(identity: AuthContext, sid?: string): { token: string; expiresIn: number };
     /** New refresh token + its storage hash. The raw token is returned to the
      *  client ONCE; only the hash is persisted. */
     newRefresh(): { token: string; hash: string };
@@ -193,6 +199,10 @@ export interface AuthServiceOptions {
     now?: () => number; // epoch ms (default Date.now) — injected for expiry tests
     minPasswordLength?: number; // default 8
     audit?: AuditPort; // privileged-action accountability sink (default null) — Build 27
+    /** Instant access-token revocation index (Build 29). When provided, disable/
+     *  delete/reset/theft revoke the USER's tokens and logout/session-revoke the
+     *  SESSION's token immediately (middleware checks it per request). */
+    revocations?: RevocationIndex;
 }
 
 export interface RegisterInput { email: string; password: string; deviceLabel?: string }
@@ -278,11 +288,22 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
     const inviteTtlSec = opts.inviteTtlSec ?? 604_800; // 7 days
     const resetTtlSec = opts.resetTtlSec ?? 3_600; // 1 hour
     const audit = opts.audit ?? nullAuditPort();
+    const revocations = opts.revocations; // Build 29: absent = instant revocation off
+    const nowSec = () => Math.floor(now() / 1000);
     const iso = (ms: number) => new Date(ms).toISOString();
     // Best-effort + ISOLATED: an audit-sink failure must never fail (or roll back)
     // the auth op. Events carry NO secrets (no token / hash / password).
     const emit = async (e: Omit<AuditEvent, 'at'>): Promise<void> => {
         try { await audit.record({ ...e, at: iso(now()) }); } catch { /* isolated */ }
+    };
+    /** Instantly revoke ALL of a user's live access (Build 29): each live session's
+     *  `sid` exactly (no timing ambiguity — sids are never reused) + a user-level
+     *  strictly-before-iat entry for sid-less tokens. Call BEFORE revoking the
+     *  sessions durably (needs the pre-revocation live set). */
+    const revokeUserAccess = async (userId: string): Promise<void> => {
+        if (!revocations) return;
+        for (const s of await repo.listSessionsByUser(userId)) if (!s.revokedAt) revocations.revokeSession(s.id, nowSec());
+        revocations.revokeUser(userId, nowSec());
     };
     const deviceLabelOf = (raw: unknown): string | null =>
         typeof raw === 'string' && raw.trim() ? raw.trim().slice(0, 100) : null;
@@ -305,7 +326,9 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             revokedReason: null,
         };
         await repo.insertSession(session);
-        const access = crypto.mintAccess(identity);
+        // Bind the access token to its session (`sid`) so revoking THIS session
+        // (logout / revoke-one-device) kills only this device's access (Build 29).
+        const access = crypto.mintAccess(identity, session.id);
         return { accessToken: access.token, refreshToken, expiresIn: access.expiresIn, identity };
     }
 
@@ -356,6 +379,7 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
                 // for a DELIBERATELY-revoked session (logout / user-killed / reset) is
                 // simply dead — reject it alone, so revoking one device leaves the rest.
                 if (session.revokedReason === 'rotated') {
+                    await revokeUserAccess(session.userId); // theft → kill live access too
                     await repo.revokeAllUserSessions(session.userId, iso(t), 'revoked');
                     throw new UnauthorizedError('refresh token reuse detected');
                 }
@@ -379,7 +403,10 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             // Idempotent: unknown/blank token is a no-op (client is signed out either way).
             if (typeof refreshToken !== 'string' || !refreshToken) return;
             const session = await repo.findSessionByRefreshHash(crypto.hashRefresh(refreshToken));
-            if (session && !session.revokedAt) await repo.revokeSession(session.id, iso(now()), 'revoked');
+            if (session && !session.revokedAt) {
+                await repo.revokeSession(session.id, iso(now()), 'revoked');
+                revocations?.revokeSession(session.id, nowSec()); // this device's access dies now
+            }
         },
 
         async invite(input, auth) {
@@ -480,7 +507,9 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             const { hash, salt } = crypto.hashPassword(password);
             await repo.updateUserPassword(pr.userId, hash, salt);
             await repo.markPasswordResetUsed(pr.id, iso(t)); // single-use
-            // Force a fresh login everywhere: revoke every existing session.
+            // Force a fresh login everywhere: revoke every existing session AND
+            // kill their live access tokens now, not at expiry (Build 29).
+            await revokeUserAccess(pr.userId);
             await repo.revokeAllUserSessions(pr.userId, iso(t), 'revoked');
             const u = await repo.findUserById(pr.userId);
             if (u) await emit({ type: 'password.reset', tenantId: u.tenantId, actorUserId: null, targetUserId: u.id, targetEmail: u.email });
@@ -496,7 +525,10 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
             // Ownership is by userId — even an owner/admin cannot touch another user's
             // session. A missing / other-user id is denied identically (no leak).
             if (!s || s.userId !== auth.userId) throw new ForbiddenError('session not found');
-            if (!s.revokedAt) await repo.revokeSession(s.id, iso(now()), 'revoked');
+            if (!s.revokedAt) {
+                await repo.revokeSession(s.id, iso(now()), 'revoked');
+                revocations?.revokeSession(s.id, nowSec()); // only THAT device's access dies
+            }
         },
 
         // ── Account lifecycle (Build 25). Owner-only; a target is resolved deny-by-
@@ -511,7 +543,9 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
         async disableUser(userId, auth) {
             const target = await ownerTarget(userId, auth);
             await repo.setUserDisabled(target.id, iso(now()));
-            // Kill access immediately: every live session is revoked.
+            // Kill access immediately: every live session is revoked AND every
+            // already-issued access token dies now (Build 29), not at expiry.
+            await revokeUserAccess(target.id);
             await repo.revokeAllUserSessions(target.id, iso(now()), 'revoked');
             await emit({ type: 'member.disabled', tenantId: auth.tenantId, actorUserId: auth.userId, targetUserId: target.id, targetEmail: target.email });
         },
@@ -529,6 +563,7 @@ export function makeAuthService(repo: AuthRepo, crypto: AuthCrypto, opts: AuthSe
                 throw new ForbiddenError('cannot delete the last owner');
             }
             const at = iso(now());
+            await revokeUserAccess(target.id); // live access dies now
             await repo.revokeAllUserSessions(target.id, at, 'revoked'); // sessions dead
             await repo.revokeInvitationsByInviter(target.id, at); // their pending invites dead
             await repo.deleteUserById(target.id); // account removed; tenant + others intact
@@ -649,6 +684,11 @@ export function memoryAuthRepo(): AuthRepo {
             let n = 0;
             for (const pr of [...resetsById.values()]) if (pr.expiresAt < before) { resetsById.delete(pr.id); resetsByHash.delete(pr.tokenHash); n++; }
             return n;
+        },
+        async listRecentRevocations(since) {
+            const users = [...usersById.values()].filter(u => u.disabledAt && u.disabledAt >= since).map(u => ({ id: u.id, at: u.disabledAt as string }));
+            const sessions = [...sessionsById.values()].filter(s => s.revokedAt && s.revokedAt >= since && s.revokedReason === 'revoked').map(s => ({ id: s.id, at: s.revokedAt as string }));
+            return { users, sessions };
         },
     };
 }

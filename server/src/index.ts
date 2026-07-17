@@ -28,8 +28,18 @@ async function main() {
     // NotificationPort delivers invite/reset tokens. Console until a real provider
     // (SMTP/SES/SendGrid) implements the same port — the ONLY delivery abstraction.
     const authDeps = { repo: pgAuthRepo(pool), crypto: makeAuthCrypto(config.authSecret, config.accessTtlSec), notifications: consoleNotificationPort(), audit: pgAuditPort(pool) };
-    const { app, beginShutdown, purgeExpired } = buildApp(config, pgOrderRepo(pool), async () => { await pool.query('SELECT 1'); }, authDeps);
+    const { app, beginShutdown, purgeExpired, revocations } = buildApp(config, pgOrderRepo(pool), async () => { await pool.query('SELECT 1'); }, authDeps);
     const DRAIN_MS = config.shutdownDrainMs; // validated at boot (fail-fast, C2)
+
+    // Seed the RevocationIndex from durable state BEFORE serving (Build 29): a
+    // restart must not resurrect access tokens of users disabled / sessions
+    // deliberately revoked within the last access-TTL window. One bounded query.
+    if (revocations) {
+        const since = new Date(Date.now() - (config.accessTtlSec + 120) * 1000).toISOString();
+        const recent = await authDeps.repo.listRecentRevocations(since);
+        for (const u of recent.users) revocations.revokeUser(u.id, Math.floor(new Date(u.at).getTime() / 1000));
+        for (const s of recent.sessions) revocations.revokeSession(s.id, Math.floor(new Date(s.at).getTime() / 1000));
+    }
 
     await app.listen({ port: config.port, host: '0.0.0.0' });
 

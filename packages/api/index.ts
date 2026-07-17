@@ -16,6 +16,7 @@ export * from './authSession'; // pure credential/session service + AuthRepo/Aut
 export * from './authClient'; // client auth: login/refresh/logout + sync getToken/authFetch (Build 20)
 export * from './notificationPort'; // capability-token delivery seam (invite/reset) — Build 26
 export * from './auditPort'; // privileged-action accountability seam — Build 27
+export * from './revocation'; // instant access-token revocation index — Build 29
 export * from './orderValidation'; // boundary input validation
 export * from './rateLimiter'; // in-memory token-bucket limiter
 export * from './metrics'; // pure Prometheus registry (Counter/Gauge/Histogram)

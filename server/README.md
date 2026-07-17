@@ -113,6 +113,17 @@ export const orderGateway = makeHttpOrderGateway(httpOrderPort({
 }));
 ```
 
+## Instant access revocation (Build 29)
+
+Disable / delete / password-reset / logout kill live access tokens IMMEDIATELY (not at the
+≤15-min expiry). Access tokens carry an additive `sid` claim binding them to their refresh
+session; the auth engine writes a single O(1) in-memory `RevocationIndex` (sid-exact + a
+strictly-before-`iat` user entry) and `authenticateRequest` consults it per request — the hot
+path stays DB-free. The bootstrap seeds the index from durable state at boot (restart-safe).
+Revoked tokens get the SAME generic 401 (no revocation oracle). Single-instance, like the rate
+limiter. Residuals: an already-open SSE stream isn't cut mid-connection (reconnects re-auth);
+sid-less dev tokens have a ≤1s window.
+
 ## Retention sweep (Build 28)
 
 `auth_sessions` gains a row on every refresh (kept for reuse-detection); expired

@@ -269,6 +269,47 @@ async function main() {
     const purged = await purgeExpired!();
     ok('purgeExpired is callable and returns numeric counts', typeof purged.sessions === 'number' && typeof purged.invitations === 'number' && typeof purged.passwordResets === 'number');
 
+    // ── Build 29: INSTANT access-token revocation over HTTP. Raw fetch with the
+    // captured token (no authFetch auto-refresh) proves the TOKEN ITSELF dies
+    // immediately — its exp is still ~15 min away in every case below. ──
+    const rawGet = async (tok: string | undefined) => (await fetch(`${base}/orders`, { headers: { authorization: `Bearer ${tok}` } })).status;
+    const rvInv = await authClient.invite('rev@e2e.pl', 'worker');
+    const devA = createAuthClient({ baseUrl: base, store: memorySecureStore() });
+    await devA.acceptInvite(rvInv.inviteToken, 'RevPass1234');
+    const tokJoin = devA.getToken();
+    ok('freshly joined member access works (200)', (await rawGet(tokJoin)) === 200);
+    const rvRow = (await authClient.listMembers()).find(m => m.email === 'rev@e2e.pl')!;
+
+    // DISABLE → the very same unexpired token is rejected on the next request
+    await authClient.disableUser(rvRow.id);
+    ok('disable → existing access token IMMEDIATELY 401 (not at expiry)', (await rawGet(tokJoin)) === 401);
+
+    // ENABLE + two devices → LOGOUT device A kills only A's access (isolation)
+    await authClient.enableUser(rvRow.id);
+    const dA = createAuthClient({ baseUrl: base, store: memorySecureStore() });
+    await dA.login('rev@e2e.pl', 'RevPass1234');
+    const dB = createAuthClient({ baseUrl: base, store: memorySecureStore() });
+    await dB.login('rev@e2e.pl', 'RevPass1234');
+    const tokA = dA.getToken(), tokB = dB.getToken();
+    ok('both devices work pre-logout', (await rawGet(tokA)) === 200 && (await rawGet(tokB)) === 200);
+    await dA.logout();
+    ok('logout → THAT device\'s access immediately 401', (await rawGet(tokA)) === 401);
+    ok('the OTHER device\'s access still 200 (revoke-one isolation preserved)', (await rawGet(tokB)) === 200);
+
+    // PASSWORD RESET → every pre-reset access token dies now
+    const rvReq = await (await fetch(`${base}/auth/password-reset/request`, { method: 'POST', headers: jh, body: JSON.stringify({ email: 'rev@e2e.pl' }) })).json() as { resetToken?: string };
+    await fetch(`${base}/auth/password-reset/confirm`, { method: 'POST', headers: jh, body: JSON.stringify({ resetToken: rvReq.resetToken, password: 'RevNewPass1' }) });
+    ok('password reset → surviving access token IMMEDIATELY 401', (await rawGet(tokB)) === 401);
+
+    // normal login unaffected → then DELETE → instant 401
+    const dC = createAuthClient({ baseUrl: base, store: memorySecureStore() });
+    await dC.login('rev@e2e.pl', 'RevNewPass1');
+    const tokC = dC.getToken();
+    ok('fresh login after reset works normally (200)', (await rawGet(tokC)) === 200);
+    await authClient.deleteUser(rvRow.id);
+    ok('delete → existing access token IMMEDIATELY 401', (await rawGet(tokC)) === 401);
+    ok('owner\'s own access unaffected throughout', (await authClient.authFetch(`${base}/orders`, { headers: { authorization: `Bearer ${authClient.getToken()}` } })).status === 200);
+
     // 7) LOGOUT → tokens gone → requests rejected
     await authClient.logout();
     ok('logout clears the access token', authClient.getToken() === undefined);

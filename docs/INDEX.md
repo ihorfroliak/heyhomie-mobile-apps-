@@ -41,6 +41,7 @@ Full diagram: [PROJECT_STATE.md §2](PROJECT_STATE.md).
 | [authClient.ts](../packages/api/authClient.ts) | Build 20/23: client auth — sync `getToken`, `authFetch` (refresh-on-401), login/register/refresh/logout/bootstrap + **invite/acceptInvite** over `/auth/*`; `configureAuth` singleton. RN-safe. |
 | [notificationPort.ts](../packages/api/notificationPort.ts) | Build 26: **the one delivery seam** — `NotificationPort` (`sendInvitation`/`sendPasswordReset`) + `nullNotificationPort` (tests) + `consoleNotificationPort` (dev, token-free + masked). Injected via `AuthDeps.notifications`; route delivers best-effort + isolated. Never logs tokens. |
 | [auditPort.ts](../packages/api/auditPort.ts) | Build 27: **the one accountability seam** — `AuditPort` (`record`/`listByTenant`) + null/memory/console impls (+ server `pgAuditPort`). The service emits an event per privileged action; owner/admin read via `GET /auth/audit`. Best-effort + isolated; NO secrets. |
+| [revocation.ts](../packages/api/revocation.ts) | Build 29: **the one instant-revocation seam** — `RevocationIndex` (O(1), TTL-bounded, throttled sweep). Engine writes (sid-exact + strict-`<` iat), middleware reads per request; boot-seeded via `listRecentRevocations`. Hot path stays DB-free. |
 | [httpResilience.ts](../packages/api/httpResilience.ts) | Pure resilience: `withRetry`/`withTimeout`/`backoffDelay`/`RetryBudget`/`dedupe`/`HttpStatusError`. |
 | [serverConfig.ts](../packages/api/serverConfig.ts) | Fail-fast env validation (`loadServerConfig`, `ConfigError`). |
 | [errors.ts](../packages/api/errors.ts) | Canonical `AppError` hierarchy (internal/public code, status, retryable, `toResponse` — no leak). |
@@ -149,7 +150,9 @@ invite/reset tokens (best-effort + isolated, token-free logs). **27** `AuditPort
 the one accountability seam (migration v9 `audit_log`; every privileged action emits
 an event; `GET /auth/audit`; no secrets). **28** retention sweep — `purgeExpired()`
 hard-deletes expired sessions/invites/resets (`auth_sessions` grows per refresh);
-scheduled from bootstrap (`AUTH_PURGE_INTERVAL_SEC`); no migration, no contract change.
+scheduled from bootstrap (`AUTH_PURGE_INTERVAL_SEC`). **29** instant access-token
+revocation — `RevocationIndex` + `sid` claim + boot seeding (disable/delete/reset/
+logout kill live access NOW; device-isolated; no migration, no contract change).
 Every "verified" build surfaced ≥1 real defect only reachable
 by executing the real path — details + measured evidence in [BUILD_HISTORY.md](BUILD_HISTORY.md).
 

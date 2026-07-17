@@ -161,6 +161,24 @@ UI (apps/*)  ──imports only──►  orderGateway  (packages/api/orderContr
      Mirrors the in-memory sweep convention already in `idempotency.ts`/`rateLimiter.ts`, extended to
      durable rows. **Consequence of violating:** unbounded table growth (perf/disk) or, if you delete
      live rows, mass unintended logout.
+     10. **Instant revocation via `RevocationIndex` only** (Build 29) — access validation is
+     deliberately STATELESS (pure HMAC; the hot path does zero DB work — that's why reads measure
+     ~1788 rps). Instant revocation therefore lives in ONE O(1) in-memory index, written by the auth
+     ENGINE (disable/delete/reset/theft → every live session's `sid` exactly + a strictly-before-`iat`
+     user entry; logout/session-revoke → that one `sid`) and read by the auth MIDDLEWARE per request.
+     **WHY this shape:** a per-request DB lookup (token-version column) would gut the hot path;
+     `sid`-exact revocation avoids the 1-second `iat` granularity ambiguity (same-second re-login after
+     re-enable works). **WHEN TO REUSE:** any new "this principal must lose access NOW" feature —
+     write to the index from the engine, never from a route. **WHEN NOT:** don't use it for ordinary
+     expiry (TTL already handles that) and don't grow it into a general cache. **SECURITY INVARIANTS:**
+     revoked tokens get the SAME generic 401 (no revocation oracle); entries self-expire after one
+     access-TTL (the token is dead anyway) — bounded memory; boot MUST seed from durable state
+     (`listRecentRevocations`) or a restart resurrects tokens for ≤1 TTL; single-instance like the
+     rate limiter — multi-instance needs a shared store (same INFRA-PENDING item). **COMMON MISTAKES:**
+     comparing `iat` with `<=` (kills same-second re-logins); forgetting to revoke sids BEFORE
+     durably revoking sessions (the live set is needed); indexing rotation-revoked sessions (bloats
+     the index — rotations die naturally). **CONSEQUENCE OF VIOLATING:** either a revocation gap
+     (compromised/disabled principals keep access) or a broken login UX.
 - **Client auth (Build 20/21/22)**: `authClient.ts` (sync `getToken`, `authFetch` refresh-on-401,
   login/register/refresh/logout/bootstrap); **all three apps** (client/admin/worker) authenticate
   + gate to `/login` + consume `orderGateway`; tokens live in **expo-secure-store**. Apps never

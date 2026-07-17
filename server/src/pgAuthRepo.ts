@@ -171,5 +171,13 @@ export function pgAuthRepo(pool: Pool): AuthRepo {
         async purgeExpiredPasswordResets(before) {
             return (await pool.query('DELETE FROM password_resets WHERE expires_at < $1', [before])).rowCount ?? 0;
         },
+        async listRecentRevocations(since) {
+            const users = await pool.query<{ id: string; at: string | Date }>(
+                'SELECT id, disabled_at AS at FROM users WHERE disabled_at >= $1', [since]);
+            const sessions = await pool.query<{ id: string; at: string | Date }>(
+                `SELECT id, revoked_at AS at FROM auth_sessions WHERE revoked_at >= $1 AND revoked_reason = 'revoked'`, [since]);
+            const iso = (r: { id: string; at: string | Date }) => ({ id: r.id, at: new Date(r.at).toISOString() });
+            return { users: users.rows.map(iso), sessions: sessions.rows.map(iso) };
+        },
     };
 }

@@ -10,21 +10,22 @@
  */
 import crypto from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { validateClaims, UnauthorizedError, type AuthContext, type Role, type TokenClaims, type VerifyTokenOptions } from '@heyhomie/api';
+import { validateClaims, UnauthorizedError, type AuthContext, type Role, type TokenClaims, type VerifyTokenOptions, type RevocationIndex } from '@heyhomie/api';
 
 export const DEFAULT_TTL_SEC = 900; // 15 min — bounds the replay window
 
-export function signAuthToken(auth: AuthContext, secret: string, ttlSec: number = DEFAULT_TTL_SEC): string {
+export function signAuthToken(auth: AuthContext, secret: string, ttlSec: number = DEFAULT_TTL_SEC, sid?: string): string {
     const iat = Math.floor(Date.now() / 1000);
-    const claims: TokenClaims = { ...auth, iat, exp: iat + ttlSec };
+    const claims: TokenClaims = { ...auth, iat, exp: iat + ttlSec, ...(sid ? { sid } : {}) };
     const body = Buffer.from(JSON.stringify(claims)).toString('base64url');
     const sig = crypto.createHmac('sha256', secret).update(body).digest('base64url');
     return `${body}.${sig}`;
 }
 
 /** Verify signature (timing-safe) THEN validate claims (expiry/skew/shape). Any
- *  failure → null (caller returns a generic 401). */
-export function verifyAuthToken(token: string, secret: string, opts?: VerifyTokenOptions): AuthContext | null {
+ *  failure → null (caller returns a generic 401). Also surfaces `iat`/`sid` so the
+ *  caller can consult the RevocationIndex (Build 29). */
+export function verifyAuthToken(token: string, secret: string, opts?: VerifyTokenOptions): (AuthContext & { iat: number; sid?: string }) | null {
     const dot = token.indexOf('.');
     if (dot < 0) return null;
     const body = token.slice(0, dot);
@@ -34,8 +35,9 @@ export function verifyAuthToken(token: string, secret: string, opts?: VerifyToke
     const b = Buffer.from(expected);
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
     try {
-        const parsed = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
-        return validateClaims(parsed, opts); // throws on expiry/malformed
+        const parsed = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as Record<string, unknown>;
+        const auth = validateClaims(parsed, opts); // throws on expiry/malformed
+        return { ...auth, iat: parsed.iat as number, ...(typeof parsed.sid === 'string' ? { sid: parsed.sid } : {}) };
     } catch {
         return null;
     }
@@ -55,8 +57,11 @@ const isPublic = (url: string) => {
     return PRE_AUTH_ROUTES.has(path);
 };
 
-/** Fastify preHandler: extract + verify identity, attach `req.auth`, else 401. */
-export function authenticateRequest(secret: string, devMode: boolean) {
+/** Fastify preHandler: extract + verify identity, attach `req.auth`, else 401.
+ *  With a RevocationIndex (Build 29), a cryptographically-valid but REVOKED token
+ *  (disable/delete/reset/logout) is rejected with the SAME generic 401 — no
+ *  "your token was revoked" oracle. O(1) in-memory check; the hot path stays DB-free. */
+export function authenticateRequest(secret: string, devMode: boolean, revocations?: RevocationIndex) {
     return async (req: FastifyRequest, _reply: FastifyReply) => {
         if (isPublic(req.url)) return; // health probes + dev token are public
 
@@ -69,7 +74,10 @@ export function authenticateRequest(secret: string, devMode: boolean) {
         if (token) {
             const auth = verifyAuthToken(token, secret);
             if (!auth) throw new UnauthorizedError('invalid or expired token');
-            (req as FastifyRequest & { auth: AuthContext }).auth = auth;
+            if (revocations?.isRevoked({ userId: auth.userId, sid: auth.sid, iat: auth.iat })) {
+                throw new UnauthorizedError('invalid or expired token'); // generic — no revocation oracle
+            }
+            (req as FastifyRequest & { auth: AuthContext }).auth = { userId: auth.userId, tenantId: auth.tenantId, role: auth.role };
             return;
         }
 

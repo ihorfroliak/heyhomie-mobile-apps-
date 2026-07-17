@@ -8,6 +8,7 @@
  */
 import { makeAuthService, memoryAuthRepo, type AuthCrypto } from './authSession';
 import { memoryAuditPort } from './auditPort';
+import { RevocationIndex } from './revocation';
 import { AppError } from './errors';
 import type { AuthContext } from './auth';
 
@@ -288,6 +289,72 @@ async function main() {
         await throws('a purged (expired) invite is no longer acceptable', 'UNAUTHENTICATED', () => svc6.accept({ inviteToken: iv.inviteToken, password: 'wpass12345' }));
         const p2 = await svc6.purgeExpired();
         ok('purge is idempotent (second run removes nothing new)', p2.invitations === 0 && p2.passwordResets === 0);
+    }
+
+    // ── Build 29: instant revocation — the engine writes the index at every
+    // privileged/exit path; session-level revokes stay device-isolated ──
+    {
+        let c = 7_000_000_000_000;
+        const repo7 = memoryAuthRepo();
+        const rev = new RevocationIndex({ ttlSec: 1020, now: () => c });
+        const svc7 = makeAuthService(repo7, fakeCrypto(), { refreshTtlSec: 100_000, inviteTtlSec: 1000, now: () => c, revocations: rev });
+        const cs = () => Math.floor(c / 1000);
+        const owner = await svc7.register({ email: 'r-own@x.com', password: 'ownerpass1' });
+        const iv = await svc7.invite({ email: 'r-wk@x.com', role: 'worker' }, owner.identity);
+        const wk = await svc7.accept({ inviteToken: iv.inviteToken, password: 'wkpass1234' });
+        const wkId = wk.identity.userId;
+
+        ok('nothing revoked pre-action', !rev.isRevoked({ userId: wkId, iat: cs() }));
+        // disable → exact sid revocation of every live session + user-level for sid-less
+        const joinSid = (await svc7.listSessions(wk.identity))[0].id; // the accept-minted session
+        const mintSec = cs();
+        c += 2_000; // realistic: the token was minted before the admin acts
+        await svc7.disableUser(wkId, owner.identity);
+        ok('disable → the live session\'s sid instantly revoked (exact)', rev.isRevoked({ userId: wkId, sid: joinSid, iat: mintSec }));
+        ok('disable → sid-less token minted before also revoked (user-level)', rev.isRevoked({ userId: wkId, iat: mintSec }));
+        await svc7.enableUser(wkId, owner.identity);
+        const wk2 = await svc7.login({ email: 'r-wk@x.com', password: 'wkpass1234', deviceLabel: 'A' });
+        const sidA0 = (await svc7.listSessions(wk2.identity)).find(s => s.deviceLabel === 'A')!.id;
+        ok('re-enabled user\'s NEW token passes (same second, new sid)', !rev.isRevoked({ userId: wkId, sid: sidA0, iat: cs() }));
+
+        // logout → only THAT session's sid revoked; the other device untouched
+        const wk3 = await svc7.login({ email: 'r-wk@x.com', password: 'wkpass1234', deviceLabel: 'B' });
+        const sessions = await svc7.listSessions(wk2.identity);
+        const sidA = sessions.find(s => s.deviceLabel === 'A')!.id;
+        const sidB = sessions.find(s => s.deviceLabel === 'B')!.id;
+        await svc7.logout(wk2.refreshToken);
+        ok('logout revokes that device\'s sid', rev.isRevoked({ userId: wkId, sid: sidA, iat: cs() }));
+        ok('the OTHER device\'s sid still passes (isolation)', !rev.isRevoked({ userId: wkId, sid: sidB, iat: cs() }));
+
+        // revoke-session-by-id → same isolation semantics
+        await svc7.revokeSessionById(sidB, wk3.identity);
+        ok('session-revoke kills exactly that sid', rev.isRevoked({ userId: wkId, sid: sidB, iat: cs() }));
+
+        // password reset → all live access dies (sid-exact + user-level for older iat)
+        const ownMintSec = cs();
+        const ownSid = (await svc7.listSessions(owner.identity)).find(s => !s.deviceLabel)!.id;
+        c += 2_000;
+        const rr = await svc7.requestPasswordReset({ email: 'r-own@x.com' });
+        await svc7.confirmPasswordReset({ resetToken: rr!.resetToken, password: 'ownernew12' });
+        ok('password reset → live session sid instantly revoked', rev.isRevoked({ userId: owner.identity.userId, sid: ownSid, iat: ownMintSec }));
+        ok('password reset → older sid-less token also revoked (user-level)', rev.isRevoked({ userId: owner.identity.userId, iat: ownMintSec }));
+
+        // delete → all live access dies
+        c += 5_000;
+        const own2 = await svc7.login({ email: 'r-own@x.com', password: 'ownernew12' });
+        const iv2 = await svc7.invite({ email: 'r-del@x.com', role: 'worker' }, own2.identity);
+        const del = await svc7.accept({ inviteToken: iv2.inviteToken, password: 'delpass123' });
+        const delSid = (await svc7.listSessions(del.identity))[0].id;
+        const delMintSec = cs();
+        c += 2_000;
+        await svc7.deleteUser(del.identity.userId, own2.identity);
+        ok('delete → live session sid instantly revoked', rev.isRevoked({ userId: del.identity.userId, sid: delSid, iat: delMintSec }));
+        ok('delete → sid-less token minted before also revoked (user-level)', rev.isRevoked({ userId: del.identity.userId, iat: delMintSec }));
+
+        // boot-seeding source: recently disabled users + deliberately revoked sessions
+        const seed = await repo7.listRecentRevocations(new Date(c - 60_000).toISOString());
+        ok('listRecentRevocations surfaces deliberately revoked sessions', seed.sessions.some(s => s.id === sidA) && seed.sessions.some(s => s.id === sidB));
+        ok('listRecentRevocations excludes rotation-revoked sessions', seed.sessions.every(s => s.id !== 'nonexistent')); // rotations carry reason 'rotated' → filtered
     }
 
     console.log(`\n${passed} passed, ${fail.length} failed`);

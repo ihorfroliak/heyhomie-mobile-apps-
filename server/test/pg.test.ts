@@ -331,6 +331,41 @@ async function main() {
             ok('expired invitation gone from pg', (await pool.query(`SELECT count(*)::int AS c FROM invitations WHERE id='exp-i'`)).rows[0].c === 0);
             ok('the live register session survived the purge over pg', (await pool.query(`SELECT count(*)::int AS c FROM auth_sessions WHERE user_id=$1 AND expires_at > now()`, [uid])).rows[0].c >= 1);
         }
+
+        // ── Build 29: instant access revocation over real pg + restart seeding ──
+        {
+            const jsonH = { 'content-type': 'application/json' };
+            const cfg = loadServerConfig({ DATABASE_URL: PG_URL, AUTH_SECRET: 'pg-rev-secret-16chars-x', PORT: '8099', AUTH_DEV_MODE: '1' });
+            const rp = makePool(PG_URL);
+            const mkApp = () => buildApp(cfg, pgOrderRepo(rp), async () => { await rp.query('SELECT 1'); }, { repo: pgAuthRepo(rp), crypto: makeAuthCrypto('pg-rev-secret-16chars-x', 900) });
+            const b1 = mkApp();
+            await b1.app.listen({ port: 0, host: '127.0.0.1' });
+            const rb = `http://127.0.0.1:${(b1.app.server.address() as { port: number }).port}`;
+            const own = await (await fetch(`${rb}/auth/register`, { method: 'POST', headers: jsonH, body: JSON.stringify({ email: 'rev@pg.pl', password: 'RevOwner12!' }) })).json() as { accessToken: string };
+            const oh = { ...jsonH, authorization: `Bearer ${own.accessToken}` };
+            const inv = await (await fetch(`${rb}/auth/invite`, { method: 'POST', headers: oh, body: JSON.stringify({ email: 'rev-w@pg.pl', role: 'worker' }) })).json() as { inviteToken: string };
+            const mem = await (await fetch(`${rb}/auth/accept-invite`, { method: 'POST', headers: jsonH, body: JSON.stringify({ inviteToken: inv.inviteToken, password: 'RevMember1!' }) })).json() as { accessToken: string };
+            const memGet = async (base2: string) => (await fetch(`${base2}/orders`, { headers: { authorization: `Bearer ${mem.accessToken}` } })).status;
+            ok('member access works over pg (200)', (await memGet(rb)) === 200);
+            const memberId = (await rp.query(`SELECT id FROM users WHERE email='rev-w@pg.pl'`)).rows[0].id as string;
+            // NB: body-less POST — no json content-type (Fastify 400s an empty JSON body)
+            const dis = await fetch(`${rb}/auth/users/${memberId}/disable`, { method: 'POST', headers: { authorization: `Bearer ${own.accessToken}` } });
+            ok('disable over pg returned 204', dis.status === 204);
+            ok('disable → unexpired access token IMMEDIATELY 401 over pg', (await memGet(rb)) === 401);
+
+            // restart: a fresh app (empty index) seeded from durable state — the
+            // exact bootstrap procedure — must keep rejecting the old token.
+            const seedSrc = await pgAuthRepo(rp).listRecentRevocations(new Date(Date.now() - 1_020_000).toISOString());
+            ok('listRecentRevocations surfaces the disabled user + revoked sessions', seedSrc.users.some(u => u.id === memberId) && seedSrc.sessions.length >= 1);
+            const b2 = mkApp();
+            for (const u of seedSrc.users) b2.revocations!.revokeUser(u.id, Math.floor(new Date(u.at).getTime() / 1000));
+            for (const s of seedSrc.sessions) b2.revocations!.revokeSession(s.id, Math.floor(new Date(s.at).getTime() / 1000));
+            await b2.app.listen({ port: 0, host: '127.0.0.1' });
+            const rb2 = `http://127.0.0.1:${(b2.app.server.address() as { port: number }).port}`;
+            ok('after restart + seeding, the revoked token is STILL 401', (await memGet(rb2)) === 401);
+            ok('owner token still works on the restarted app (seeding is precise)', (await fetch(`${rb2}/orders`, { headers: { authorization: `Bearer ${own.accessToken}` } })).status === 200);
+            await b1.app.close(); await b2.app.close(); await rp.end();
+        }
     }
 
     await pool.end();

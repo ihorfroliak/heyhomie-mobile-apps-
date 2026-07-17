@@ -33,8 +33,8 @@ export function makeAuthCrypto(secret: string, accessTtlSec: number): AuthCrypto
             return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
         },
 
-        mintAccess(identity: AuthContext) {
-            return { token: signAuthToken(identity, secret, accessTtlSec), expiresIn: accessTtlSec };
+        mintAccess(identity: AuthContext, sid?: string) {
+            return { token: signAuthToken(identity, secret, accessTtlSec, sid), expiresIn: accessTtlSec };
         },
 
         newRefresh() {

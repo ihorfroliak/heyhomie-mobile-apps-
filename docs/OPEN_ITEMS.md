@@ -16,18 +16,18 @@ Grouped by whether it's a future code change, an intentional trade-off, or exter
    all in the single `makeAuthService`). Future: SMS-OTP / OAuth issuers; a **real
    `NotificationPort` provider** (SMTP / SES / SendGrid — the seam + `consoleNotificationPort`
    ship in Build 26; a production impl + `EMAIL_*` config + retry/backoff is the only remaining
-   piece for real invite/reset email); **instant access-token
-   revocation on disable** (today an already-issued access token stays valid ≤15 min after
-   disable — refresh is blocked; a deny-list or shorter access TTL would close the window);
-   periodic GC for expired/revoked `auth_sessions`/`invitations`/`password_resets`; a reactive
+   piece for real invite/reset email); ~~instant access-token revocation~~ — **DONE (Build 29,
+   `RevocationIndex` + `sid` claim + boot seeding)**; residuals: an already-OPEN SSE stream isn't
+   cut mid-connection (reconnect re-auths) and the index is single-instance (multi-instance needs
+   a shared store — same INFRA item as the rate limiter); a reactive
    auth-state store; a "current session" marker in `GET /auth/sessions`; owner-transfer (today
    the sole `owner` is immovable — the last-owner delete guard is belt-and-suspenders behind
    the self guard); the audit trail (Build 27) captures privileged actions; expired
    sessions/invitations/password-resets are swept by `purgeExpired()` (Build 28). Future:
    **audit-log retention/GC** + shipping `audit_log` to a SIEM (another `AuditPort` impl) +
-   auditing `login.failed` for brute-force forensics. **Recommended next build:** a real `NotificationPort`
-   provider (SMTP/SES — the seam is done, only a provider impl + `EMAIL_*` config remain) OR the
-   access-token deny-list — the last gaps before a real-user pilot of the full auth lifecycle.
+   auditing `login.failed` for brute-force forensics. **Recommended next build:** a real
+   `NotificationPort` provider (SMTP/SES — the seam is done, only a provider impl + `EMAIL_*`
+   config remain; needs external creds) — the auth lifecycle is otherwise pilot-complete in-repo.
    (The single biggest remaining score gap is **Scalability ~50**, but pagination + SSE-delta are
    contract-versioned — a deliberate future OrderGateway v2 build, not contract-safe additive work.)
 4. **Real payment/notification transport** — `notifyClient` is a console mock; Stripe

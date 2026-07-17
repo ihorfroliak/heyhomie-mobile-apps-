@@ -23,10 +23,14 @@ import { ForbiddenTenantError, UnauthorizedError } from './errors';
 
 export const FORBIDDEN_TENANT_ACCESS = 'FORBIDDEN_TENANT_ACCESS';
 
-/** Signed-token claims: identity + issued-at / expiry (epoch seconds). */
+/** Signed-token claims: identity + issued-at / expiry (epoch seconds). `sid`
+ *  (Build 29, additive) binds the access token to the refresh session that
+ *  minted it, enabling per-session instant revocation; tokens without it
+ *  (legacy, /dev/token) remain valid and are covered by user-level revocation. */
 export interface TokenClaims extends AuthContext {
     iat: number;
     exp: number;
+    sid?: string;
 }
 
 export interface VerifyTokenOptions {
