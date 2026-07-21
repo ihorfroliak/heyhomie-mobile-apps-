@@ -2,7 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Read [docs/INDEX.md](docs/INDEX.md) first** — it is the durable, always-updated map (file-by-file purpose, full build log, hard rules). This file is the short orientation; INDEX.md is the detail.
+**Read [docs/PROJECT_MEMORY.md](docs/PROJECT_MEMORY.md) first** — the compact entry point (current state, frozen boundaries, standards index, what's left, reading order). Then [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md) (architecture + engineering standards) and [docs/INDEX.md](docs/INDEX.md) (file-by-file map). This file is the short orientation.
+
+**Project memory rules** (the repo docs ARE the persistent memory):
+- PROJECT_MEMORY → PROJECT_STATE → OPEN_ITEMS are the first sources of truth. OPEN_ITEMS drives the next Build.
+- Completed Build history is archived in [docs/archive/](docs/archive/README.md) — **do NOT re-audit closed Builds** when gate/typecheck/CI are green; trust the record. Full-project audits only when memory is stale/contradictory or a major architectural change is proposed; otherwise do targeted audits.
+- New durable engineering standards go in PROJECT_STATE (numbered); Build-specific detail goes in the archive; update OPEN_ITEMS/PRODUCTION_STATUS only where current state actually changed.
+- Don't chase artificial "100%" scores. Frozen contract areas (OrderGateway/orderContract) need explicit versioned-major authorization before any change. Always separate current state from historical evidence.
 
 ## What this is
 npm-workspaces monorepo. Three Expo/React-Native apps (`apps/{client,worker,admin}`) + pure-TS packages (`packages/{domain,api,ui,design,analytics}`) + a Fastify+Postgres orders backend (`server/`). Domain of a cleaning marketplace (bookings/missions/payments/payouts), Polish market (pl/en/uk).

@@ -10,10 +10,11 @@ tree. Trust the map; open only the 1–2 files a task needs.
 ---
 
 ## Quick nav
-- **Next-session bootstrap / handoff** → [docs/PROJECT_STATE.md](PROJECT_STATE.md) (read first)
+- **START HERE (compact entry point)** → [docs/PROJECT_MEMORY.md](PROJECT_MEMORY.md)
+- Next-session bootstrap / architecture + standards → [docs/PROJECT_STATE.md](PROJECT_STATE.md)
 - Readiness + deploy verdict → [docs/PRODUCTION_STATUS.md](PRODUCTION_STATUS.md)
 - What's left / trade-offs → [docs/OPEN_ITEMS.md](OPEN_ITEMS.md)
-- Build ledger (single source) → [docs/BUILD_HISTORY.md](BUILD_HISTORY.md)
+- Build index (slim) → [docs/BUILD_HISTORY.md](BUILD_HISTORY.md) · full detail → [docs/archive/](archive/README.md)
 - AI dev team / workflow → [docs/TEAM.md](TEAM.md) + [.claude/agents/](../.claude/agents/)
 - Deep dives → [docs/engineering/](engineering/data_integrity.md) · [docs/security/](security/security_model.md) · [docs/observability/](observability/observability.md)
 - Legal (pl/en) → [legal/](../legal/) (privacy, terms, non-circumvention)
