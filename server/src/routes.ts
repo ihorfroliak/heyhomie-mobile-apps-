@@ -1,8 +1,8 @@
 /** REST + SSE routes. 1:1 with the OrderGateway HTTP port. Tenant-enforced. */
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { toContractOrder, validateSubmitOrderInput, NotFoundError, IdempotencyStore, ValidationError, nullNotificationPort, type AuthService, type InviteRole, type NotificationPort, type OrderService, type ServerOrder, type SubmitOrderResult } from '@heyhomie/api';
+import { toContractOrder, validateSubmitOrderInput, NotFoundError, IdempotencyStore, ValidationError, nullNotificationPort, type AuthService, type InviteRole, type NotificationPort, type OrderService, type RevocationIndex, type ServerOrder, type SubmitOrderResult } from '@heyhomie/api';
 import type { FastifyBaseLogger } from 'fastify';
-import { reqAuth } from './auth.js';
+import { reqAuth, reqAuthToken } from './auth.js';
 
 /**
  * Auth endpoints (Build 18) — PUBLIC (pre-auth), rate-limited by the onRequest
@@ -169,9 +169,16 @@ export function registerRoutes(app: FastifyInstance, service: OrderService, idem
  * its own tenant, so no data crosses the boundary.
  * NOTE: single-instance. Horizontal scale needs Postgres LISTEN/NOTIFY.
  */
-export function registerStream(app: FastifyInstance, service: OrderService, metrics?: { sseConnections: { add: (d: number) => void } }, sseSockets?: Set<{ end: () => void }>): void {
+export function registerStream(app: FastifyInstance, service: OrderService, metrics?: { sseConnections: { add: (d: number) => void } }, sseSockets?: Set<{ end: () => void }>, opts?: { revocations?: RevocationIndex; heartbeatMs?: number }): void {
+    const heartbeatMs = opts?.heartbeatMs ?? 15_000;
     app.get('/orders/stream', async (req, reply) => {
         const auth = reqAuth(req);
+        const tok = reqAuthToken(req);
+        // A long-lived stream authenticated ONCE at connect; without this it would
+        // keep streaming a disabled/deleted/reset user's tenant data indefinitely
+        // (the per-request revocation check can't reach an open socket). Re-check on
+        // each heartbeat → a revoked stream is cut within one heartbeat (Build 30).
+        const isRevoked = () => !!(opts?.revocations && tok && opts.revocations.isRevoked({ userId: auth.userId, sid: tok.sid, iat: tok.iat }));
         // Take over the socket so Fastify won't try to serialize/error-handle this
         // reply after we've streamed bytes (a post-headers throw would otherwise
         // double-writeHead and crash the process — found under SSE load, Build 13).
@@ -201,9 +208,16 @@ export function registerStream(app: FastifyInstance, service: OrderService, metr
             }
         };
         const unsub = service.subscribe(() => { void send(); });
-        // Heartbeat comment keeps the connection alive through proxies and lets the
-        // client's watchdog detect a dead link. Cleared on close (no timer leak).
-        const heartbeat = setInterval(() => write(': ping\n\n'), 15_000);
+        // Heartbeat: keep-alive + enforce revocation. If the connection's token has
+        // been revoked, end the socket (the 'close' handler below runs cleanup).
+        const heartbeat = setInterval(() => {
+            if (isRevoked()) {
+                req.log.info({ correlationId: req.id, tenantId: auth.tenantId }, 'sse_revoked');
+                try { reply.raw.end(); } catch { /* already closed */ }
+                return;
+            }
+            write(': ping\n\n');
+        }, heartbeatMs);
         // Register cleanup BEFORE any awaited work (Build 16 / C1): the initial
         // `send()` awaits a DB query, and a client that disconnects during it emits
         // 'close' once — if the handler were attached after the await it would miss
@@ -217,6 +231,8 @@ export function registerStream(app: FastifyInstance, service: OrderService, metr
             metrics?.sseConnections.add(-1);
             req.log.info({ correlationId: req.id, tenantId: auth.tenantId }, 'sse_disconnected');
         });
+        // Reject an already-revoked token at connect (don't even send the snapshot).
+        if (isRevoked()) { try { reply.raw.end(); } catch { /* already closed */ } return; }
         await send(); // initial snapshot (tenant-scoped) — cleanup already wired
     });
 }

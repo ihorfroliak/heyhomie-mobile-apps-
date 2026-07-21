@@ -178,7 +178,13 @@ UI (apps/*)  ──imports only──►  orderGateway  (packages/api/orderContr
      comparing `iat` with `<=` (kills same-second re-logins); forgetting to revoke sids BEFORE
      durably revoking sessions (the live set is needed); indexing rotation-revoked sessions (bloats
      the index — rotations die naturally). **CONSEQUENCE OF VIOLATING:** either a revocation gap
-     (compromised/disabled principals keep access) or a broken login UX.
+     (compromised/disabled principals keep access) or a broken login UX. **Long-lived connections
+     (Build 30):** a connection authenticated ONCE (SSE `/orders/stream`) must RE-CHECK the index —
+     the per-request middleware can't reach an open socket. `/orders/stream` stashes the token's
+     `{sid,iat}` (`reqAuthToken`) and re-checks on each heartbeat (cadence `SSE_HEARTBEAT_SEC`,
+     default 15s = max cut latency), ending the socket on revocation. **When you add any new
+     long-lived/streamed endpoint, apply the same re-check** — do NOT assume connect-time auth is
+     sufficient. Residual: the cut latency is one heartbeat (bounded, not instant).
 - **Client auth (Build 20/21/22)**: `authClient.ts` (sync `getToken`, `authFetch` refresh-on-401,
   login/register/refresh/logout/bootstrap); **all three apps** (client/admin/worker) authenticate
   + gate to `/login` + consume `orderGateway`; tokens live in **expo-secure-store**. Apps never

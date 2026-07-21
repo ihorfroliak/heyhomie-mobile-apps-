@@ -14,7 +14,7 @@ Latest build → [BUILD_HISTORY.md](BUILD_HISTORY.md). Gate (`npm run check`): a
 | Deployment | 85 | docker build + compose healthy + restart verified; non-root, reproducible build |
 | Infrastructure | 78 | containerized stack proven; single-instance (multi-instance needs shared state) |
 | Maintainability | 87 | clean layering, anti-dep guard, frozen contract, docs; server typecheck now clean + gated (Build 19) |
-| Testability | 95 | 794 gated assertions + live/e2e/pg/ops/load/repro harnesses; CI runs the strongest suites — `test:pg`+`test:ops` (real pg), `test:live`, `test:e2e` (auth lifecycle + notification + audit + retention + instant revocation), `typecheck:server`; one-command `verify:full`. Mobile UI not machine-run (no Expo runtime) — auth + gateway logic proven via e2e + gate tests |
+| Testability | 95 | 796 gated assertions + live/e2e/pg/ops/load/repro harnesses; CI runs the strongest suites — `test:pg`+`test:ops` (real pg), `test:live`, `test:e2e` (auth lifecycle + notification + audit + retention + instant revocation), `typecheck:server`; one-command `verify:full`. Mobile UI not machine-run (no Expo runtime) — auth + gateway logic proven via e2e + gate tests |
 | Scalability | ~50 | DB indexed/efficient; SSE full-snapshot + unpaginated list are the ceilings |
 
 ## Performance baseline (Build 13, measured on real Postgres via `test:load`)
@@ -51,8 +51,9 @@ Access validation stays stateless (HMAC-only, zero DB on the hot path); a single
 disable/delete/reset/theft revoke every live session's `sid` (access tokens carry `sid`) +
 a strictly-before-`iat` user entry; logout/session-revoke kill exactly one device. Boot
 seeds the index from durable state (restart-safe). Same generic 401 (no revocation oracle).
-Single-instance like the rate limiter; residual: an already-OPEN SSE stream isn't cut mid-
-connection (reconnects re-auth), and sid-less dev tokens have a ≤1s window.
+Single-instance like the rate limiter. **Open SSE streams are also cut on revocation (Build 30):**
+`/orders/stream` re-checks the index each heartbeat (`SSE_HEARTBEAT_SEC`, default 15s = max cut
+latency). Residual: sid-less dev tokens have a ≤1s window; multi-instance needs a shared index.
 
 ## Retention / GC (Build 28)
 `AuthService.purgeExpired()` hard-deletes auth rows past `expires_at` (sessions / invitations /

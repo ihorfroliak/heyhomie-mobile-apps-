@@ -17,9 +17,9 @@ Grouped by whether it's a future code change, an intentional trade-off, or exter
    `NotificationPort` provider** (SMTP / SES / SendGrid — the seam + `consoleNotificationPort`
    ship in Build 26; a production impl + `EMAIL_*` config + retry/backoff is the only remaining
    piece for real invite/reset email); ~~instant access-token revocation~~ — **DONE (Build 29,
-   `RevocationIndex` + `sid` claim + boot seeding)**; residuals: an already-OPEN SSE stream isn't
-   cut mid-connection (reconnect re-auths) and the index is single-instance (multi-instance needs
-   a shared store — same INFRA item as the rate limiter); a reactive
+   `RevocationIndex` + `sid` claim + boot seeding)**; open SSE streams are also cut on revocation
+   (**Build 30**, `SSE_HEARTBEAT_SEC` re-check). Residuals: the index is single-instance
+   (multi-instance needs a shared store — same INFRA item as the rate limiter); a reactive
    auth-state store; a "current session" marker in `GET /auth/sessions`; owner-transfer (today
    the sole `owner` is immovable — the last-owner delete guard is belt-and-suspenders behind
    the self guard); the audit trail (Build 27) captures privileged actions; expired

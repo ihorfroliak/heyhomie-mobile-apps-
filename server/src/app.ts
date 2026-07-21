@@ -191,7 +191,7 @@ export function buildApp(config: ServerConfig, repo: OrderRepo, checkDb: () => P
     // Create-dedup store (Build 17): 10-min TTL, tenant-scoped by the route.
     const idem = new IdempotencyStore<SubmitOrderResult>();
     registerRoutes(app, service, idem);
-    registerStream(app, service, metrics, sseSockets);
+    registerStream(app, service, metrics, sseSockets, { revocations, heartbeatMs: config.sseHeartbeatSec * 1000 });
 
     return { app, metrics, beginShutdown: () => { shuttingDown = true; }, purgeExpired, revocations };
 }

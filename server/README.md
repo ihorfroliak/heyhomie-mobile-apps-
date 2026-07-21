@@ -121,8 +121,9 @@ session; the auth engine writes a single O(1) in-memory `RevocationIndex` (sid-e
 strictly-before-`iat` user entry) and `authenticateRequest` consults it per request — the hot
 path stays DB-free. The bootstrap seeds the index from durable state at boot (restart-safe).
 Revoked tokens get the SAME generic 401 (no revocation oracle). Single-instance, like the rate
-limiter. Residuals: an already-open SSE stream isn't cut mid-connection (reconnects re-auth);
-sid-less dev tokens have a ≤1s window.
+limiter. **Open SSE streams are cut too (Build 30):** `/orders/stream` re-checks the index each
+heartbeat (`SSE_HEARTBEAT_SEC`, default 15s = max cut latency) and ends the socket on revocation.
+Residual: sid-less dev tokens have a ≤1s window; multi-instance needs a shared index.
 
 ## Retention sweep (Build 28)
 

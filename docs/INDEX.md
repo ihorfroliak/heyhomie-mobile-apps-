@@ -152,7 +152,9 @@ an event; `GET /auth/audit`; no secrets). **28** retention sweep — `purgeExpir
 hard-deletes expired sessions/invites/resets (`auth_sessions` grows per refresh);
 scheduled from bootstrap (`AUTH_PURGE_INTERVAL_SEC`). **29** instant access-token
 revocation — `RevocationIndex` + `sid` claim + boot seeding (disable/delete/reset/
-logout kill live access NOW; device-isolated; no migration, no contract change).
+logout kill live access NOW; device-isolated). **30** SSE stream revocation — an
+open `/orders/stream` re-checks the index each heartbeat (`SSE_HEARTBEAT_SEC`) and
+is cut on revocation; extends standard #10, no contract change.
 Every "verified" build surfaced ≥1 real defect only reachable
 by executing the real path — details + measured evidence in [BUILD_HISTORY.md](BUILD_HISTORY.md).
 

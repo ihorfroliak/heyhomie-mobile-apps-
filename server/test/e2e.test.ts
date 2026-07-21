@@ -59,7 +59,8 @@ async function main() {
     // Real server: real auth crypto (scrypt/HMAC), memory repos, real socket.
     // AUTH_DEV_MODE=1 so /auth/password-reset/request echoes the token (local only,
     // same gate as /dev/token) — lets the e2e complete the reset flow without email.
-    const config = loadServerConfig({ DATABASE_URL: 'postgres://unused/e2e', AUTH_SECRET, PORT: '8092', AUTH_DEV_MODE: '1' });
+    // SSE_HEARTBEAT_SEC=1 so a revoked stream is cut within ~1s (Build 30) — testable.
+    const config = loadServerConfig({ DATABASE_URL: 'postgres://unused/e2e', AUTH_SECRET, PORT: '8092', AUTH_DEV_MODE: '1', SSE_HEARTBEAT_SEC: '1' });
     // Spy NotificationPort — records every delivery (with its raw token) so the e2e
     // can prove the SAME minted token is handed to delivery.
     const sent: { type: string; email: string; token: string }[] = [];
@@ -309,6 +310,30 @@ async function main() {
     await authClient.deleteUser(rvRow.id);
     ok('delete → existing access token IMMEDIATELY 401', (await rawGet(tokC)) === 401);
     ok('owner\'s own access unaffected throughout', (await authClient.authFetch(`${base}/orders`, { headers: { authorization: `Bearer ${authClient.getToken()}` } })).status === 200);
+
+    // ── Build 30: an OPEN SSE stream is cut when the connection's token is revoked ──
+    const openStream = (tok: string) => {
+        const ctrl = new AbortController();
+        const st = { frames: 0, closed: false };
+        void (async () => {
+            try {
+                const res = await fetch(`${base}/orders/stream?token=${encodeURIComponent(tok)}`, { signal: ctrl.signal });
+                const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+                for (;;) { const { done } = await reader.read(); if (done) break; st.frames++; }
+            } catch { /* aborted / socket ended */ }
+            st.closed = true;
+        })();
+        return { st, abort: () => ctrl.abort() };
+    };
+    const sseInv = await authClient.invite('sse@e2e.pl', 'worker');
+    const sseMem = createAuthClient({ baseUrl: base, store: memorySecureStore() });
+    await sseMem.acceptInvite(sseInv.inviteToken, 'SsePass1234');
+    const sseMemId = (await authClient.listMembers()).find(m => m.email === 'sse@e2e.pl')!.id;
+    const stream = openStream(sseMem.getToken()!);
+    ok('SSE stream is live (received the initial snapshot)', await until(() => stream.st.frames >= 1, 2000) && !stream.st.closed);
+    await authClient.disableUser(sseMemId); // revokes the member's session sid
+    ok('disable cuts the OPEN SSE stream within one heartbeat', await until(() => stream.st.closed, 4000));
+    stream.abort();
 
     // 7) LOGOUT → tokens gone → requests rejected
     await authClient.logout();

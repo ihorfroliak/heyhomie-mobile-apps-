@@ -26,6 +26,8 @@ export interface ServerConfig {
     resetTtlSec: number;
     /** Retention sweep interval (sec) — purge expired auth rows; 0 = disabled (Build 28). */
     purgeIntervalSec: number;
+    /** SSE heartbeat cadence (sec) — also the max latency to cut a revoked stream (Build 30). */
+    sseHeartbeatSec: number;
 }
 
 export class ConfigError extends Error {
@@ -95,6 +97,10 @@ export function loadServerConfig(env: Record<string, string | undefined>): Serve
     const purgeIntervalSec = purgeRaw ? Number(purgeRaw) : 3_600; // 1 hour
     if (!Number.isInteger(purgeIntervalSec) || purgeIntervalSec < 0) issues.push(`AUTH_PURGE_INTERVAL_SEC must be a non-negative integer seconds (got "${env.AUTH_PURGE_INTERVAL_SEC}")`);
 
+    const sseRaw = env.SSE_HEARTBEAT_SEC?.trim();
+    const sseHeartbeatSec = sseRaw ? Number(sseRaw) : 15; // keep-alive + revoked-stream cut latency
+    if (!Number.isInteger(sseHeartbeatSec) || sseHeartbeatSec < 1) issues.push(`SSE_HEARTBEAT_SEC must be a positive integer seconds (got "${env.SSE_HEARTBEAT_SEC}")`);
+
     if (issues.length) throw new ConfigError(issues);
-    return { databaseUrl: databaseUrl as string, port, authSecret: authSecret as string, devMode, production, trustProxy, rateCapacity, rateRefillPerSec, shutdownDrainMs, accessTtlSec, refreshTtlSec, inviteTtlSec, resetTtlSec, purgeIntervalSec };
+    return { databaseUrl: databaseUrl as string, port, authSecret: authSecret as string, devMode, production, trustProxy, rateCapacity, rateRefillPerSec, shutdownDrainMs, accessTtlSec, refreshTtlSec, inviteTtlSec, resetTtlSec, purgeIntervalSec, sseHeartbeatSec };
 }

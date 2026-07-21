@@ -78,6 +78,10 @@ export function authenticateRequest(secret: string, devMode: boolean, revocation
                 throw new UnauthorizedError('invalid or expired token'); // generic — no revocation oracle
             }
             (req as FastifyRequest & { auth: AuthContext }).auth = { userId: auth.userId, tenantId: auth.tenantId, role: auth.role };
+            // Stash the raw {sid,iat} so a long-lived SSE stream can re-check the
+            // RevocationIndex on its heartbeat (Build 30) — the per-request check
+            // above doesn't cover an already-open stream.
+            (req as FastifyRequest & { authToken?: { sid?: string; iat: number } }).authToken = { sid: auth.sid, iat: auth.iat };
             return;
         }
 
@@ -99,4 +103,10 @@ export function authenticateRequest(secret: string, devMode: boolean, revocation
 /** Read the AuthContext an authenticated request carries. */
 export function reqAuth(req: FastifyRequest): AuthContext {
     return (req as FastifyRequest & { auth: AuthContext }).auth;
+}
+
+/** Read the raw {sid,iat} of the presented token (Build 30) — for SSE revocation
+ *  re-checks. Undefined for dev-header auth (no token). */
+export function reqAuthToken(req: FastifyRequest): { sid?: string; iat: number } | undefined {
+    return (req as FastifyRequest & { authToken?: { sid?: string; iat: number } }).authToken;
 }
