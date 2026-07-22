@@ -8,6 +8,8 @@
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "web": { "bundler": "metro" },
+    "ios": { "bundleIdentifier": "pl.heyhomie.worker", "supportsTablet": true },
+    "android": { "package": "pl.heyhomie.worker" },
     "plugins": ["expo-router"]
   }
 }

@@ -53,6 +53,23 @@ password `Password123!`) and a spread of orders (confirmed / paid / canceled).
 Re-running appends more; `--fresh` wipes first. Then point the apps at the server
 (`EXPO_PUBLIC_ORDERS_API_URL`) and log in with those accounts.
 
+## Publish to the App Store / Google Play (EAS)
+Each app has an `eas.json` (dev / preview / production profiles) and a `bundleIdentifier`
++ `package` (`pl.heyhomie.{client,admin,worker}`). To build & submit:
+```bash
+npm i -g eas-cli
+eas login                                  # free Expo account
+cd apps/client && eas init                 # links the app, writes extra.eas.projectId
+eas build --platform all --profile production      # cloud-builds .ipa + .aab
+eas submit --platform ios                  # → App Store Connect
+eas submit --platform android              # → Google Play
+```
+Repeat per app (`apps/admin`, `apps/worker`). Set the backend URL for the build with
+`eas secret:create --name EXPO_PUBLIC_ORDERS_API_URL --value https://api.heyhomie.pl`
+(the profiles already read it). **Still needed (external, not code):** Apple Developer
+account ($99/yr) + Google Play account ($25 once); app **icons & splash** (add
+`assets/` + `expo.icon`/`expo.splash`); store screenshots; a **privacy policy** URL.
+
 ## Current state (2026-07) — honest snapshot
 | Surface | Built | Live-backend wired | Notes |
 |---|---|---|---|

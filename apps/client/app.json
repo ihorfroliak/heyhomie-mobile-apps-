@@ -9,11 +9,14 @@
     "newArchEnabled": true,
     "web": { "bundler": "metro" },
     "ios": {
+      "bundleIdentifier": "pl.heyhomie.client",
+      "supportsTablet": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "HeyHomie uses your location to preselect your city so you see the services available near you."
       }
     },
     "android": {
+      "package": "pl.heyhomie.client",
       "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"]
     },
     "plugins": [
