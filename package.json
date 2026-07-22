@@ -22,6 +22,7 @@
     "test:pg": "npx tsx server/test/pg.test.ts",
     "test:ops": "npx tsx server/test/ops.ts",
     "test:repro": "npx tsx server/test/repro.ts",
+    "seed": "npx tsx server/scripts/seed.ts",
     "check": "npm test && npm run typecheck && npm run check:apps",
     "verify:full": "npm run check && npm run typecheck:server && npm run test:live && npm run test:e2e && npm run test:pg && npm run test:ops"
   },

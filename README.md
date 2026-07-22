@@ -36,6 +36,38 @@ docker compose up --build              # full stack (server + Postgres)
 npm run test:pg | test:ops | test:live | test:repro
 ```
 
+## Try it on your phone (5 min, no App Store)
+1. Install **Expo Go** (App Store / Google Play).
+2. `npm run client` (or `worker` / `admin`) → scan the QR with your phone.
+3. The app opens live. With no backend it runs **offline on in-app demo data** —
+   enough to click through the UI. For real data, point it at a running server:
+   set `EXPO_PUBLIC_ORDERS_API_URL=http://<your-host>:8090` before starting.
+
+## Seed test data (see real orders/accounts instead of demo mocks)
+```bash
+docker compose up -d db                 # or any Postgres 16 on PG_URL
+PG_URL=postgres://postgres:postgres@localhost:5434/heyhomie npm run seed   # add --fresh to reset
+```
+Creates one business tenant + 3 logins (`owner@` / `admin@` / `worker@heyhomie.test`,
+password `Password123!`) and a spread of orders (confirmed / paid / canceled).
+Re-running appends more; `--fresh` wipes first. Then point the apps at the server
+(`EXPO_PUBLIC_ORDERS_API_URL`) and log in with those accounts.
+
+## Current state (2026-07) — honest snapshot
+| Surface | Built | Live-backend wired | Notes |
+|---|---|---|---|
+| **Backend** (`server/`) | ✅ | ✅ | Fastify + pg; auth full lifecycle, orders, SSE. **796 gated tests + CI green.** |
+| **Web** (`heyhomie-client`, separate repo) | ✅ | ✅ | SEO landing (JSON-LD, city/district internal linking). |
+| **Client app** | ✅ | ✅ core loop | booking → activity + auth on the real server. |
+| **Worker app** | ✅ | ⚠ partial | jobs + auth live; today/earnings/schedule still demo data. |
+| **Admin app** (25 screens) | ✅ | ⚠ partial | members/invites/login live; the ops suite (finance/pipeline/…) still demo. |
+
+**What's done in code but needs external accounts/keys (not wired yet):** hosting +
+domain + TLS · **Stripe** payments · **email/SMS** delivery (the `NotificationPort`
+seam is ready — a provider impl + creds is all that's left) · App Store / Google
+Play publishing (needs `eas.json` + developer accounts). See
+[docs/OPEN_ITEMS.md](docs/OPEN_ITEMS.md) and [docs/PRODUCTION_STATUS.md](docs/PRODUCTION_STATUS.md).
+
 ## Where to go next
 - Current status / next-session bootstrap → [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md)
 - Readiness + deploy verdict → [docs/PRODUCTION_STATUS.md](docs/PRODUCTION_STATUS.md)
