@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useSyncExternalStore } from 'react';
 import { ScrollView, Text, View, Pressable, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { demoMissions, demoAvailableMissions, demoAnalyticsMissions } from '@heyhomie/api';
-import { adminStats, dashboardSummary, formatMoney, formatDuration, type Locale } from '@heyhomie/domain';
+import { orderGateway, demoAvailableMissions, demoAnalyticsMissions } from '@heyhomie/api';
+import { dashboardSummary, formatDuration } from '@heyhomie/domain';
 import { colors, spacing, typography } from '@heyhomie/design';
-import { Card, useLocale } from '@heyhomie/ui';
+import { Card } from '@heyhomie/ui';
 
 type IconName = keyof typeof Ionicons.glyphMap;
 
@@ -28,11 +28,14 @@ const MANAGE_LINKS: { href: string; label: string; icon: IconName }[] = [
 ];
 
 export default function Dashboard() {
-    const locale = useLocale();
     const router = useRouter();
     const [showMore, setShowMore] = useState(false);
+    // LIVE order counts from the gateway (Local offline / HTTP when wired).
+    const orders = useSyncExternalStore(orderGateway.subscribe, orderGateway.ordersSnapshot);
+    const count = (s: string) => orders.filter(o => o.status === s).length;
+    const confirmed = count('confirmed');
+    // Secondary "additional metrics" stay on demo aggregates (no backend domain yet).
     const extra = dashboardSummary([...demoAnalyticsMissions, ...demoAvailableMissions], { capacityMinutes: 3 * 30 * 60 }).secondary;
-    const stats = adminStats([...demoMissions, ...demoAvailableMissions]);
 
     return (
         <SafeAreaView style={styles.safe} edges={['top']}>
@@ -42,27 +45,30 @@ export default function Dashboard() {
             </View>
             <ScrollView contentContainerStyle={styles.body}>
                 <View style={styles.grid}>
-                    <Kpi icon="cash-outline" label="Revenue (done)" value={formatMoney(stats.revenue, 'PLN', locale)} />
-                    <Kpi icon="briefcase-outline" label="Missions" value={String(stats.total)} />
-                    <Kpi icon="pulse-outline" label="Live now" value={String(stats.live)} accent={colors.blue} />
-                    <Kpi icon="star-outline" label="Avg rating" value="4.8" />
+                    <Kpi icon="briefcase-outline" label="Orders" value={String(orders.length)} />
+                    <Kpi icon="pulse-outline" label="Confirmed" value={String(confirmed)} accent={colors.blue} />
+                    <Kpi icon="checkmark-done-outline" label="Paid" value={String(count('paid'))} accent={colors.success} />
+                    <Kpi icon="close-circle-outline" label="Canceled" value={String(count('canceled'))} />
                 </View>
 
                 <Text style={styles.section}>Needs attention</Text>
-                {stats.searching > 0 ? (
-                    <Card style={styles.alert}>
-                        <View style={styles.alertRow}>
-                            <Ionicons name="alert-circle" size={20} color={colors.danger} />
-                            <View style={{ flex: 1 }}>
-                                <Text style={styles.alertTitle}>{stats.searching} unassigned mission{stats.searching > 1 ? 's' : ''}</Text>
-                                <Text style={styles.alertSub}>Searching for a homie — assign now</Text>
+                {confirmed > 0 ? (
+                    <Pressable onPress={() => router.push('/missions')}>
+                        <Card style={styles.alert}>
+                            <View style={styles.alertRow}>
+                                <Ionicons name="alert-circle" size={20} color={colors.danger} />
+                                <View style={{ flex: 1 }}>
+                                    <Text style={styles.alertTitle}>{confirmed} order{confirmed > 1 ? 's' : ''} to fulfil</Text>
+                                    <Text style={styles.alertSub}>Confirmed — complete once the job is done</Text>
+                                </View>
+                                <Ionicons name="chevron-forward" size={16} color={colors.grey} />
                             </View>
-                        </View>
-                    </Card>
+                        </Card>
+                    </Pressable>
                 ) : (
                     <View style={styles.okRow}>
                         <Ionicons name="checkmark-circle" size={16} color={colors.success} />
-                        <Text style={styles.ok}>All missions assigned.</Text>
+                        <Text style={styles.ok}>No open orders.</Text>
                     </View>
                 )}
 

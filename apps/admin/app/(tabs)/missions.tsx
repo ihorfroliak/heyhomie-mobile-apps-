@@ -1,36 +1,42 @@
-import React, { useState } from 'react';
+import React, { useState, useSyncExternalStore } from 'react';
 import { ScrollView, Text, View, Pressable, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { demoMissions, demoAvailableMissions } from '@heyhomie/api';
-import { missionStatusLabel, tr, formatDuration, type Locale, type Mission, type MissionStatus } from '@heyhomie/domain';
+import { Ionicons } from '@expo/vector-icons';
+import { orderGateway, type OrderStatus } from '@heyhomie/api';
+import { serviceName } from '@heyhomie/domain';
 import { colors, spacing, typography } from '@heyhomie/design';
-import { Card, StatusBadge, EmptyState, useLocale } from '@heyhomie/ui';
+import { Card, EmptyState, useLocale } from '@heyhomie/ui';
 
-const all: Mission[] = [...demoAvailableMissions, ...demoMissions];
+// Admin order list — LIVE from the gateway (Local offline / HTTP when a backend is
+// wired). Uses the contract's OrderStatus, not the demo Mission model.
+const STATUS: Record<OrderStatus, { label: string; tone: string }> = {
+    confirmed: { label: 'Confirmed', tone: colors.blue },
+    completed: { label: 'Completed', tone: colors.warning },
+    paid: { label: 'Paid', tone: colors.success },
+    canceled: { label: 'Canceled', tone: colors.grey },
+};
 
-type Filter = 'all' | 'searching_homie' | 'live' | 'done';
+type Filter = 'all' | OrderStatus;
 const FILTERS: { key: Filter; label: string }[] = [
     { key: 'all', label: 'All' },
-    { key: 'searching_homie', label: 'Searching' },
-    { key: 'live', label: 'Live' },
-    { key: 'done', label: 'Done' },
+    { key: 'confirmed', label: 'Confirmed' },
+    { key: 'completed', label: 'Completed' },
+    { key: 'paid', label: 'Paid' },
+    { key: 'canceled', label: 'Canceled' },
 ];
 
-const matches = (m: Mission, f: Filter) =>
-    f === 'all' ||
-    (f === 'live' ? m.status === 'homie_found' || m.status === 'in_progress' : m.status === (f as MissionStatus));
-
-export default function Missions() {
+export default function Orders() {
     const locale = useLocale();
     const router = useRouter();
     const [filter, setFilter] = useState<Filter>('all');
-    const list = all.filter(m => matches(m, filter));
+    const orders = useSyncExternalStore(orderGateway.subscribe, orderGateway.ordersSnapshot);
+    const list = orders.filter(o => filter === 'all' || o.status === filter).slice().reverse();
 
     return (
         <SafeAreaView style={styles.safe} edges={['top']}>
             <ScrollView contentContainerStyle={styles.body}>
-                <Text style={styles.h1}>Missions</Text>
+                <Text style={styles.h1}>Orders</Text>
                 <View style={styles.filters}>
                     {FILTERS.map(f => (
                         <Pressable key={f.key} onPress={() => setFilter(f.key)} style={[styles.chip, filter === f.key && styles.chipOn]}>
@@ -38,24 +44,34 @@ export default function Missions() {
                         </Pressable>
                     ))}
                 </View>
-                {list.length === 0 ? <EmptyState title="No missions" subtitle="Try a different filter." /> : null}
-                {list.map(m => (
-                    <Pressable key={m.id} onPress={() => router.push(`/mission/${m.id}`)}>
-                        <Card style={{ marginBottom: spacing.md }}>
-                            <View style={styles.row}>
-                                <StatusBadge status={m.status} locale={locale} />
-                                <Text style={styles.id}>#{m.id}</Text>
-                            </View>
-                            <Text style={styles.title}>
-                                {m.plan === 'general' ? 'General' : 'Standard'} · {formatDuration(m.durationMinutes)} · {m.address.city}
-                            </Text>
-                            <Text style={styles.meta}>
-                                {m.client.firstName}
-                                {m.homie ? ` · ${m.homie.firstName}` : ` · ${tr(missionStatusLabel.searching_homie, locale)}`}
-                            </Text>
-                        </Card>
-                    </Pressable>
-                ))}
+                {list.length === 0 ? <EmptyState title="No orders" subtitle="They appear here as clients book." /> : null}
+                {list.map(o => {
+                    const s = STATUS[o.status];
+                    return (
+                        <Pressable key={o.id} onPress={() => router.push(`/order/${o.id}`)}>
+                            <Card style={{ marginBottom: spacing.md }}>
+                                <View style={styles.row}>
+                                    <View style={[styles.badge, { backgroundColor: `${s.tone}1A` }]}>
+                                        <Text style={[styles.badgeText, { color: s.tone }]}>{s.label}</Text>
+                                    </View>
+                                    <Text style={styles.id}>#{o.id.slice(0, 8)}</Text>
+                                </View>
+                                <Text style={styles.title}>{o.serviceId ? serviceName(o.serviceId, locale) : 'Cleaning order'}</Text>
+                                <View style={styles.metaRow}>
+                                    <Ionicons name="location-outline" size={13} color={colors.grey} />
+                                    <Text style={styles.meta}>{o.cityId ?? '—'}</Text>
+                                    {o.contact?.phone ? (
+                                        <>
+                                            <Ionicons name="call-outline" size={13} color={colors.grey} style={{ marginLeft: 8 }} />
+                                            <Text style={styles.meta}>{o.contact.phone}</Text>
+                                        </>
+                                    ) : null}
+                                    <Ionicons name="chevron-forward" size={16} color={colors.grey} style={{ marginLeft: 'auto' }} />
+                                </View>
+                            </Card>
+                        </Pressable>
+                    );
+                })}
             </ScrollView>
         </SafeAreaView>
     );
@@ -71,7 +87,10 @@ const styles = StyleSheet.create({
     chipText: { color: colors.grey, fontSize: typography.sizes.small, fontWeight: '500' },
     chipTextOn: { color: colors.white },
     row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    id: { color: colors.grey, fontSize: typography.sizes.caption },
-    title: { fontWeight: '600', color: colors.primary, marginTop: 6 },
-    meta: { color: colors.grey, fontSize: typography.sizes.small, marginTop: 2 },
+    badge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
+    badgeText: { fontSize: 11, fontWeight: '700' },
+    id: { color: colors.grey, fontSize: typography.sizes.caption, fontVariant: ['tabular-nums'] },
+    title: { fontWeight: '700', color: colors.primary, marginTop: 8, fontSize: typography.sizes.h3 },
+    metaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
+    meta: { color: colors.grey, fontSize: typography.sizes.small },
 });
