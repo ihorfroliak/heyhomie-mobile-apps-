@@ -9,8 +9,8 @@
     "@heyhomie/domain": "*"
   },
   "peerDependencies": {
+    "@expo/vector-icons": "^14.0.4",
     "react": "*",
-    "react-native": "*",
-    "@expo/vector-icons": "*"
+    "react-native": "*"
   }
 }

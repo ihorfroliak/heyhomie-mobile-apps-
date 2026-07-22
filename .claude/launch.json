@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "client-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--workspace", "heyhomie-client-app", "run", "web", "--", "--port", "8081"],
+      "port": 8081
+    },
+    {
+      "name": "admin-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--workspace", "heyhomie-admin-app", "run", "web", "--", "--port", "8082"],
+      "port": 8082
+    },
+    {
+      "name": "worker-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--workspace", "heyhomie-worker-app", "run", "web", "--", "--port", "8083"],
+      "port": 8083
+    }
+  ]
+}

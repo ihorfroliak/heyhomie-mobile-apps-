@@ -10,7 +10,7 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "@expo/vector-icons": "^14.0.0",
+    "@expo/vector-icons": "^14.0.4",
     "@heyhomie/analytics": "*",
     "@heyhomie/api": "*",
     "@heyhomie/design": "*",
