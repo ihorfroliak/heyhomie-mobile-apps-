@@ -51,7 +51,7 @@ All order state flows through a **frozen contract**, `packages/api/orderContract
 - **Verify with `npm run check`** after any change; it's the single source of truth for "green".
 - Packages are **ESM** (`"type": "module"`); the server imports the barrel — keep it importable (no CJS-only patterns).
 - RN screens can't be typechecked here (no native `node_modules`); `check:apps` is their guard.
-- **Bash cwd resets between calls** — prepend `cd /c/Users/ihorf/Downloads/heyhomie-apps`.
+- **Bash cwd resets between calls** — prepend `cd /c/Users/ihorf/Projects/heyhomie-mobile`.
 - Distinguish **CODE COMPLETE vs INFRASTRUCTURE PENDING** — much of the server can only be exercised with Docker/Postgres (`test:pg`/`test:ops`/compose), which aren't in the default gate.
 - Dockerfile CMD is `node --import tsx` (node must be PID 1 for SIGTERM to drain, not `npx tsx`).
 - Windows LF→CRLF git warnings are benign.
